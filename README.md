@@ -5,15 +5,10 @@ while Claude works. Free tokens, a leaderboard, and nothing to buy.
 
 An independent plugin by [altoption](https://github.com/altoption). Not made or endorsed by Anthropic.
 
-```
-┌────────┬────────┬────────┬────────┬────────┐
-│ 🌾HAY* │ 🐖PIG  │ 🌾HAY  │ 🐄COW  │ 🌻MILL │
-├────────┼────────┼────────┼────────┼────────┤
-│ 🌽CORN │ 🏠BARN │🍎APPLE │ 🌽CORN │ 🌾HAY  │
-├────────┼────────┼────────┼────────┼────────┤
-│ 🌻MILL │ 🌾HAY  │ 🍀LUCK │ 🍀LUCK │🍎APPLE │
-└────────┴────────┴────────┴────────┴────────┘
-```
+<p>
+  <img src="docs/slots.svg" alt="The Slots tab in Claude Code: a 5 by 3 grid of farm symbols with a winning line of hay highlighted" width="508">
+  <img src="docs/poker.svg" alt="The Poker tab in Claude Code: five cards with a pair of aces held, ready to draw" width="508">
+</p>
 
 ## Install
 
