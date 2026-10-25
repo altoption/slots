@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Bonus, CasinoView, Pomo } from '../types'
+import type { Bonus, CasinoView, Pomo, Sea, Shot } from '../types'
 import { cardFace, cardText, isRedCard, randomGrid, renderReels } from './ascii'
+import { aim, coord, fire, hits, isSea, isShot, isWon, newSea, shipAt, SIZE } from './battleship'
 import { brier, isGithubPage, newCalibration, testOutcome, type Calibration } from './game'
 import { bonusDeal, bonusSpin, dealFrom, drawFrom, milestoneOf, newSeed, spinFrom, type Deal, type Spin } from './local'
 import {
@@ -32,10 +33,12 @@ const NEW_POKER = (): CasinoView['poker'] => ({
   message: '',
 })
 const NEW_STATS = (): CasinoView['stats'] => ({ plays: 0, points: 0, best: 0 })
+const NEW_BATTLE = (): CasinoView['battle'] => ({ sea: newSea(crypto.randomUUID()), last: null, best: null })
 const view = atom(
   { plugin: 'terminal-slots', key: 'view' } as const,
   {
     tab: 'slots',
+    claudeDeals: true,
     message: '',
     isPaneOpen: false,
     now: 0,
@@ -43,10 +46,11 @@ const view = atom(
     stats: NEW_STATS(),
     slots: NEW_SLOTS(),
     poker: NEW_POKER(),
+    battle: NEW_BATTLE(),
     pomo: newPomo(),
     calib: { settled: 0, brier: null, pending: null },
   } as CasinoView,
-  { shape: 'view-11' },
+  { shape: 'view-12' },
 )
 
 async function say($: EngineInterface, message: string): Promise<void> {
@@ -197,13 +201,69 @@ async function toggleHold($: EngineInterface, i: number): Promise<void> {
   )
 }
 
-// A Claude turn plays on whichever game is showing. Nothing plays on the Pomodoro tab, with the pane
-// hidden, mid-hand, or while a play is running.
+// ---- Battleship ------------------------------------------------------------------------------------
+
+async function saveBattle($: EngineInterface, battle: CasinoView['battle']): Promise<void> {
+  await $.store.set('battle', { sea: battle.sea, last: battle.last })
+  await $.store.set('battleBest', battle.best)
+}
+
+// "Claude fired at C6: 💥 Hit!", "You fired at A1: splash."
+const shotText = (s: Shot) => {
+  const who = s.by === 'claude' ? 'Claude' : 'You'
+  const what = s.result === 'miss' ? 'splash.' : s.result === 'hit' ? '💥 Hit!' : `💥 Sunk the ${s.ship}!`
+  return `${who} fired at ${coord(s.cell)}: ${what}`
+}
+
+// Fires one shot (yours at a square, or Claude's aimed one) and keeps the game.
+async function shoot($: EngineInterface, by: Shot['by'], cell?: number, isSure = false): Promise<Shot | null> {
+  const before = (await read($, view)).battle
+  const target = cell ?? aim(before.sea, Math.random, isSure)
+  const fired = target === null ? null : fire(before.sea, target, by)
+  if (!fired) return null
+  const won = isWon(fired.sea)
+  const battle = { sea: fired.sea, last: fired.shot, best: won ? Math.min(before.best ?? Infinity, fired.sea.shots.length) : before.best }
+  await update($, view, v => ({ ...v, battle }))
+  await saveBattle($, battle)
+  if (won) $.ui.toast(`🏆 Fleet sunk in ${fired.sea.shots.length} shots! Winning shot: ${shotText(fired.shot)}`)
+  return fired.shot
+}
+
+// The 🏆 bonus on this tab: a shot sure to hit.
+async function bonusShot($: EngineInterface, by: Shot['by']): Promise<void> {
+  if (isWon((await read($, view)).battle.sea)) return
+  if (await takeBonus($)) await shoot($, by, undefined, true)
+}
+
+async function newBattle($: EngineInterface): Promise<void> {
+  const best = (await read($, view)).battle.best
+  const battle = { ...NEW_BATTLE(), best }
+  await update($, view, v => ({ ...v, battle }))
+  await saveBattle($, battle)
+}
+
+async function toggleClaudeDeals($: EngineInterface): Promise<void> {
+  let on = true
+  await update($, view, v => {
+    on = !v.claudeDeals
+    return { ...v, claudeDeals: on }
+  })
+  await $.store.set('claudeDeals', on)
+}
+
+// A Claude turn plays on whichever game is showing. Nothing plays with Claude deals off, on the
+// Pomodoro tab, with the pane hidden, mid-hand, or while a play is running.
 async function autoPlay($: EngineInterface): Promise<void> {
   const v = await read($, view)
-  if (!v.isPaneOpen || inFlight) return
+  if (!v.claudeDeals || !v.isPaneOpen || inFlight) return
   if (v.tab === 'slots') await spin($, true)
   else if (v.tab === 'poker' && v.poker.phase !== 'dealt') await deal($, true)
+  else if (v.tab === 'battleship') {
+    // A finished game: Claude sets up the next one. Otherwise it fires, a sure hit when a bonus waits.
+    if (isWon(v.battle.sea)) await newBattle($)
+    else if (v.bonus) await bonusShot($, 'claude')
+    else await shoot($, 'claude')
+  }
 }
 
 // Sponsoring is a thank-you to the creator: it unlocks nothing and buys nothing.
@@ -330,8 +390,15 @@ export const register: Register = on => {
     await $.store.delete('session')
     const stats = await $.store.get('stats')
     const bonus = await $.store.get('bonus')
+    const saved = (await $.store.get('battle')) as { sea?: unknown; last?: Shot | null } | undefined
+    const best = await $.store.get('battleBest')
+    const claudeDeals = await $.store.get('claudeDeals')
     await update($, view, v => ({
       ...v,
+      claudeDeals: claudeDeals !== false,
+      battle: isSea(saved?.sea)
+        ? { sea: saved.sea as Sea, last: saved.last ?? null, best: typeof best === 'number' ? best : null }
+        : { ...NEW_BATTLE(), best: typeof best === 'number' ? best : null },
       stats: isStats(stats) ? stats : NEW_STATS(),
       bonus: isBonus(bonus) ? bonus : null,
       slots: { ...v.slots, isSpinning: false },
@@ -397,16 +464,27 @@ export const register: Register = on => {
           <Text> </Text>
           <Button key="tab-poker" variant={v.tab === 'poker' ? 'primary' : undefined} label="Poker" onPress={() => void setTab($, 'poker')} />
           <Text> </Text>
-          <Button key="tab-pomodoro" variant={v.tab === 'pomodoro' ? 'primary' : undefined} label="Pomodoro" onPress={() => void setTab($, 'pomodoro')} />
+          <Button key="tab-battleship" variant={v.tab === 'battleship' ? 'primary' : undefined} label="Battleship" onPress={() => void setTab($, 'battleship')} />
           <Text> </Text>
-          <Button key="sponsor" label="💖 Sponsor" onPress={() => void sponsor($)} />
+          <Button key="tab-pomodoro" variant={v.tab === 'pomodoro' ? 'primary' : undefined} label="Pomodoro" onPress={() => void setTab($, 'pomodoro')} />
         </Box>
-        {v.tab !== 'pomodoro' ? (
-          <Text dimColor>
-            {v.stats.plays.toLocaleString()} plays · {v.stats.points.toLocaleString()} points · best {v.stats.best.toLocaleString()}
-            {v.bonus ? <Text color="warning"> · 🏆 next play is a bonus</Text> : null}
-          </Text>
-        ) : null}
+        {/* The second row: Claude deals (not on the timer), Sponsor, and the open game's numbers. */}
+        <Box>
+          {v.tab !== 'pomodoro' ? (
+            <Button key="claude-deals" label={`🤖 Claude deals: ${v.claudeDeals ? 'On' : 'Off'}`} onPress={() => void toggleClaudeDeals($)} />
+          ) : null}
+          {v.tab !== 'pomodoro' ? <Text> </Text> : null}
+          <Button key="sponsor" label="💖 Sponsor" onPress={() => void sponsor($)} />
+          {v.tab !== 'pomodoro' ? (
+            <Text dimColor>
+              {' '}
+              {v.tab === 'battleship'
+                ? `${v.battle.sea.shots.length} shots · ${hits(v.battle.sea)} hits${v.battle.best === null ? '' : ` · best ${v.battle.best} shots`}`
+                : `${v.stats.plays.toLocaleString()} plays · ${v.stats.points.toLocaleString()} points · best ${v.stats.best.toLocaleString()}`}
+              {v.bonus ? <Text color="warning"> · 🏆 {v.tab === 'battleship' ? 'sure hit ready' : 'next play is a bonus'}</Text> : null}
+            </Text>
+          ) : null}
+        </Box>
       </Box>
     )
 
@@ -459,7 +537,84 @@ export const register: Register = on => {
         </Text>
       ) : null
 
-    const hint = <Text dimColor>Claude's busy turns play here too; commits, PRs and fixed tests earn a 🏆 bonus.</Text>
+    const hint = (
+      <Text dimColor>
+        {v.claudeDeals ? "Claude's busy turns play here too; " : 'Claude deals is off: you play every turn. '}
+        commits, PRs and fixed tests earn a 🏆 bonus.
+      </Text>
+    )
+
+    if (v.tab === 'battleship') {
+      const { sea, last } = v.battle
+      const won = isWon(sea)
+      // The winning shot is the last one of a won game.
+      const final = won ? last : null
+      const wide = columns >= 36
+      const glyph = (cell: number) => {
+        const shot = sea.shots.find(s => s.cell === cell)
+        if (!shot) return { text: '·', color: undefined as string | undefined, bold: false }
+        if (shot.result === 'miss') return { text: '○', color: 'suggestion', bold: false }
+        const ship = shipAt(sea, cell)!
+        const sunk = ship.cells.every(c => isShot(sea, c))
+        return { text: sunk ? '■' : '✕', color: final?.cell === cell ? 'warning' : RED, bold: true }
+      }
+      const fleetLeft = sea.ships.filter(sh => !sh.cells.every(c => isShot(sea, c)))
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text> </Text>
+          <Text dimColor>{'   ' + [...'ABCDEFGHIJ'].map(c => (wide ? ` ${c} ` : `${c} `)).join('')}</Text>
+          {Array.from({ length: SIZE }, (_, y) => (
+            <Box key={`sea-row-${y}`}>
+              <Text dimColor>{String(y + 1).padStart(2) + ' '}</Text>
+              {Array.from({ length: SIZE }, (_, x) => {
+                const cell = y * SIZE + x
+                const g = glyph(cell)
+                const isLast = last?.cell === cell
+                const face = wide ? (isLast ? `[${g.text}]` : ` ${g.text} `) : `${g.text} `
+                const colour = isLast && !final ? 'warning' : g.color
+                return !won && !isShot(sea, cell) ? (
+                  <Button key={`sea-${cell}`} plain label={`fire at ${coord(cell)}`} onPress={() => void shoot($, 'you', cell)}>
+                    <Text dimColor>{face}</Text>
+                  </Button>
+                ) : (
+                  <Text key={`sea-${cell}`} color={colour} bold={g.bold || isLast} dimColor={!g.color && !isLast}>
+                    {face}
+                  </Text>
+                )
+              })}
+            </Box>
+          ))}
+          <Text> </Text>
+          {final ? (
+            <Box flexDirection="column">
+              <Text bold color="warning">🏆 Fleet sunk in {sea.shots.length} shots!</Text>
+              <Text>
+                <Text bold>Winning shot: </Text>
+                {final.by === 'claude' ? 'Claude' : 'You'} fired at <Text bold color="warning">{coord(final.cell)}</Text> and sank the {final.ship}.
+              </Text>
+              <Box>
+                <Button key="battle-new" variant="primary" label="NEW GAME" onPress={() => void newBattle($)} />
+              </Box>
+            </Box>
+          ) : (
+            <Box flexDirection="column">
+              <Text bold color={last && last.result !== 'miss' ? RED : undefined}>
+                {last ? shotText(last) : 'Click a square to fire.'}
+              </Text>
+              <Text dimColor>Afloat: {fleetLeft.map(sh => `${sh.name} ${sh.cells.length}`).join(' · ')}</Text>
+              {v.bonus ? (
+                <Box>
+                  <Button key="battle-bonus" variant="primary" label="🏆 Fire a sure hit" onPress={() => void bonusShot($, 'you')} />
+                </Box>
+              ) : null}
+            </Box>
+          )}
+          {hint}
+          {v.message ? <Text dimColor>{v.message}</Text> : null}
+        </Box>
+      )
+    }
 
     if (v.tab === 'slots') {
       return (

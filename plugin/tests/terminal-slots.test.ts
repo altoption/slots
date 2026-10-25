@@ -6,6 +6,7 @@ import { brier, isGithubPage, testOutcome } from '../hooks/game'
 import { BET, BONUS_DEAL_ORDINAL, BONUS_SPIN_WIN, bonusDeal, bonusSpin, dealFrom, drawFrom, milestoneOf, spinFrom } from '../hooks/local'
 import { royalDraw, scoreDealt } from '../hooks/engine/slots-engine.js'
 import { isPomo, newPomo, nextPomo, progressBar } from '../hooks/pomodoro'
+import { aim, coord, fire, FLEET, isSea, isWon, newSea, rngFrom, SIZE } from '../hooks/battleship'
 
 const GRID = [
   ['hay', 'star', 'lantern'],
@@ -204,7 +205,7 @@ test('SPIN lands a local spin and scores it; a double press spins once', async (
     const message = (await text(ui, /^WIN \d+$|^No win\.$/)) ?? ''
     // A win lights cells; no win lights none.
     expect(message.startsWith('WIN')).toBe((reels?.props?.props?.cells ?? []).length > 0)
-    expect(await text(ui, /plays ·/)).toMatch(new RegExp(`^${n} plays ·`)) // two presses, one play
+    expect(await text(ui, /plays ·/)).toMatch(new RegExp(`(^|\\s)${n} plays ·`)) // two presses, one play
   }
   await ui.unmount()
 })
@@ -545,4 +546,163 @@ test('a pomodoro that ended while Claude Code was closed is finished, and says s
   await ui.press({ key: 'tab-pomodoro' })
   expect(await text(ui, /break$/)).toBe('☕ Short break')
   await ui.unmount()
+})
+
+// ---- Battleship ------------------------------------------------------------------------------------
+
+test('battleship rules: a fair fleet, misses, hits, sinking, winning, and no shot twice', async () => {
+  for (let n = 0; n < 50; n++) {
+    const sea = newSea(`sea-${n}`)
+    expect(sea.ships.map(s => s.cells.length)).toEqual(FLEET.map(f => f.size))
+    const all = sea.ships.flatMap(s => s.cells)
+    expect(new Set(all).size).toBe(all.length) // no overlaps
+    for (const ship of sea.ships) {
+      const rows = new Set(ship.cells.map(c => Math.floor(c / SIZE)))
+      const cols = new Set(ship.cells.map(c => c % SIZE))
+      expect(rows.size === 1 || cols.size === 1).toBe(true) // a straight line
+      const step = ship.cells[1]! - ship.cells[0]!
+      expect([1, SIZE]).toContain(step)
+      if (step === 1) expect(rows.size).toBe(1) // never wraps onto the next row
+    }
+  }
+  let sea = newSea('rules')
+  const water = Array.from({ length: SIZE * SIZE }, (_, c) => c).find(c => !sea.ships.some(s => s.cells.includes(c)))!
+  const miss = fire(sea, water, 'you')!
+  expect(miss.shot).toEqual({ cell: water, by: 'you', result: 'miss' })
+  expect(fire(miss.sea, water, 'claude')).toBe(null)
+  sea = miss.sea
+  const destroyer = sea.ships.find(s => s.name === 'Destroyer')!
+  const first = fire(sea, destroyer.cells[0]!, 'claude')!
+  expect(first.shot).toMatchObject({ result: 'hit', ship: 'Destroyer' })
+  const second = fire(first.sea, destroyer.cells[1]!, 'you')!
+  expect(second.shot).toMatchObject({ result: 'sunk', ship: 'Destroyer' })
+  sea = second.sea
+  for (const c of sea.ships.flatMap(s => s.cells)) sea = fire(sea, c, 'you')?.sea ?? sea
+  expect(isWon(sea)).toBe(true)
+  expect(fire(sea, (water + 1) % 100, 'you')).toBe(null) // a won sea takes no more shots
+  expect(coord(0)).toBe('A1')
+  expect(coord(99)).toBe('J10')
+  for (const bad of [null, {}, { ships: [], shots: [] }, { ...newSea('x'), shots: [{ cell: 100, by: 'you', result: 'miss' }] }]) expect(isSea(bad)).toBe(false)
+})
+
+test("Claude's aim: after a hit it fires beside it, along the line once it has two; a sure shot hits", async () => {
+  for (let n = 0; n < 30; n++) {
+    let sea = newSea(`aim-${n}`)
+    const carrier = sea.ships.find(s => s.name === 'Carrier')!
+    const rand = rngFrom(`r-${n}`)
+    sea = fire(sea, carrier.cells[2]!, 'you')!.sea
+    const next = aim(sea, rand)!
+    const [x, y] = [carrier.cells[2]! % SIZE, Math.floor(carrier.cells[2]! / SIZE)]
+    expect(Math.abs((next % SIZE) - x) + Math.abs(Math.floor(next / SIZE) - y)).toBe(1) // beside the hit
+    sea = fire(sea, carrier.cells[3]!, 'you')!.sea
+    expect([carrier.cells[1], carrier.cells[4]]).toContain(aim(sea, rand)) // along the line
+    const sure = aim(newSea(`sure-${n}`), rand, true)!
+    expect(newSea(`sure-${n}`).ships.some(s => s.cells.includes(sure))).toBe(true)
+  }
+})
+
+const fireAt = async (ui: any, cell: number) => ui.press({ key: `sea-${cell}` })
+
+test('the Battleship tab: fire by clicking a square; Claude fires once per busy turn', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-battleship' })
+  expect(await text(ui, /Click a square to fire/)).toBeTruthy()
+  await fireAt(ui, 0)
+  expect(await text(ui, /^You fired at A1: /)).toMatch(/splash\.|Hit!|Sunk/)
+  expect(await ui.find({ type: 'Button', key: 'sea-0' } as never)).toBeFalsy() // a square fires once
+  await claudeTurn($, 3)
+  await ui.drawn()
+  expect(await text(ui, /^Claude fired at [A-J]\d+: /)).toBeTruthy()
+  expect(await text(ui, /shots ·/)).toMatch(/^ ?2 shots/)
+  await ui.unmount()
+})
+
+test('sinking the last ship names the winning shot; NEW GAME starts over and keeps the best', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-battleship' })
+  let cell = 0
+  while (!(await text(ui, /Fleet sunk/))) await fireAt(ui, cell++)
+  const last = cell - 1
+  expect(await text(ui, /Fleet sunk/)).toBe(`🏆 Fleet sunk in ${cell} shots!`)
+  // The line is one Text with styled parts inside: read it whole.
+  const flat = (n: unknown): string => (typeof n === 'string' ? n : ((n as Node)?.children ?? []).map(flat).join(''))
+  let winning = ''
+  walk(await ui.drawn(), n => {
+    const t = n.type === 'Text' ? flat(n) : ''
+    if (/^Winning shot: /.test(t) && t.length > winning.length) winning = t
+  })
+  expect(winning).toMatch(new RegExp(`^Winning shot: You fired at ${coord(last)} and sank the (Carrier|Battleship|Cruiser|Submarine|Destroyer)\\.$`))
+  expect(await ui.find({ type: 'Button', key: 'sea-99' } as never)).toBeFalsy() // a won sea takes no shots
+  await ui.press({ key: 'battle-new' })
+  expect(await text(ui, /Click a square to fire/)).toBeTruthy()
+  expect(await text(ui, /best \d+ shots/)).toMatch(new RegExp(`best ${cell} shots`))
+  await ui.unmount()
+})
+
+test('a game in progress survives a restart', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  await start($)
+  let ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-battleship' })
+  for (const c of [0, 11, 22]) await fireAt(ui, c)
+  await ui.unmount()
+  await start($)
+  ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-battleship' })
+  expect(await text(ui, /shots ·/)).toMatch(/3 shots/)
+  expect(await ui.find({ type: 'Button', key: 'sea-11' } as never)).toBeFalsy()
+  await ui.unmount()
+})
+
+test('a milestone on the Battleship tab: a sure hit, by you or by Claude', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-battleship' })
+  await commit($)
+  expect(await text(ui, /sure hit ready/)).toBeTruthy()
+  await ui.press({ key: 'battle-bonus' })
+  expect(await text(ui, /^You fired at [A-J]\d+: 💥/)).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'battle-bonus' } as never)).toBeFalsy()
+  await ($ as any).tool.call({ tool: 'Bash', command: 'gh pr create -f' })
+  await claudeTurn($, 3)
+  await ui.drawn()
+  expect(await text(ui, /^Claude fired at [A-J]\d+: 💥/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('"Claude deals: Off" stops Claude playing on every tab, and stays off after a restart', async ($, on) => {
+  mock.store(on)
+  const clock = mock.clock(on)
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect(await label(ui, 'claude-deals')).toBe('🤖 Claude deals: On')
+  await ui.press({ key: 'claude-deals' })
+  expect(await label(ui, 'claude-deals')).toBe('🤖 Claude deals: Off')
+  for (const tab of ['tab-slots', 'tab-poker', 'tab-battleship']) {
+    await ui.press({ key: tab })
+    await claudeTurn($, 5)
+    await clock.advance(5000)
+    await ui.drawn()
+  }
+  expect(await text(ui, /Claude (spun|dealt|fired)/)).toBeFalsy()
+  await ui.press({ key: 'tab-slots' })
+  expect(await text(ui, /Claude (spun|dealt)/)).toBeFalsy()
+  expect(await text(ui, /you play every turn/)).toBeTruthy()
+  await ui.press({ key: 'spin' }) // the player still plays by hand
+  expect(await text(ui, /spinning/)).toBeTruthy()
+  await ui.unmount()
+  await start($)
+  const again = await $.ui.mount(PANE('terminal'))
+  expect(await label(again, 'claude-deals')).toBe('🤖 Claude deals: Off')
+  await again.unmount()
 })

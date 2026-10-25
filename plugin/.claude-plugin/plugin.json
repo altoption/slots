@@ -1,7 +1,7 @@
 {
   "name": "terminal-slots",
-  "version": "1.0.0",
-  "description": "Terminal Slots for Claude Code: slots, video poker and a Pomodoro timer in a side pane; Claude's busy turns play too. Runs locally.",
+  "version": "1.1.0",
+  "description": "Terminal Slots for Claude Code: slots, video poker, Battleship and a Pomodoro timer in a side pane; Claude's busy turns play too. Runs locally.",
   "author": {
     "name": "altoption",
     "url": "https://github.com/altoption"

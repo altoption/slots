@@ -2,6 +2,17 @@
 
 Update with `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [1.1.0] - 2026-10-25
+
+### Added
+- **Battleship**: sink a hidden fleet of five ships; Claude's busy turns fire a shot too. The pane names
+  the winning shot when the last ship goes down.
+- **🤖 Claude deals: On/Off**: one switch for every game. Off, you play everything by hand.
+- A 🏆 bonus on Battleship is a shot sure to hit.
+
+### Changed
+- 💖 Sponsor moved to the second row, beside Claude deals.
+
 ## [1.0.0] - 2026-10-25
 
 ### Changed

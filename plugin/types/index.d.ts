@@ -4,7 +4,9 @@ export type Cell = { reel: number; row: number }
 export type Bonus = 'tests' | 'commit' | 'pr'
 
 export type CasinoView = {
-  tab: 'slots' | 'poker' | 'pomodoro'
+  tab: 'slots' | 'poker' | 'battleship' | 'pomodoro'
+  // Claude's busy turns play the open game. Off: the player plays everything by hand.
+  claudeDeals: boolean
   message: string
   isPaneOpen: boolean
   // The clock as of the last change, for the Pomodoro countdown.
@@ -27,6 +29,8 @@ export type CasinoView = {
     win: number
     message: string
   }
+  // The Battleship game in progress, the shot just fired, and the fewest shots a game has taken.
+  battle: { sea: Sea; last: Shot | null; best: number | null }
   // The Pomodoro timer: runs on this machine only, kept in the plugin store across restarts.
   pomo: Pomo
   calib: { settled: number; brier: number | null; pending: number | null }
@@ -43,6 +47,12 @@ export type Pomo = {
   today: number
   day: string
 }
+
+// Battleship (hooks/battleship.ts): the fleet's squares, and every shot fired so far.
+export type Shooter = 'you' | 'claude'
+export type Ship = { name: string; cells: number[] }
+export type Shot = { cell: number; by: Shooter; result: 'miss' | 'hit' | 'sunk'; ship?: string }
+export type Sea = { ships: Ship[]; shots: Shot[] }
 
 declare module 'claude-code' {
   interface PluginState {

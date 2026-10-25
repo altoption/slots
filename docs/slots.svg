@@ -3,9 +3,10 @@
 <rect width="508" height="352" rx="12" fill="#1d1b22"/>
 <text x="24" y="34" fill="#b4a6f5" font-size="15" font-weight="700" text-anchor="start">[ Slots ]</text>
 <text x="115.9" y="34" fill="#e8e3d9" font-size="15" font-weight="400" text-anchor="start">[ Poker ]</text>
-<text x="207.8" y="34" fill="#e8e3d9" font-size="15" font-weight="400" text-anchor="start">[ Pomodoro ]</text>
-<text x="333.2" y="34" fill="#e8e3d9" font-size="15" font-weight="400" text-anchor="start">[ 💖 Sponsor ]</text>
-<text x="24" y="60" fill="#8f8a99" font-size="15" font-weight="400" text-anchor="start">12 plays · 340 points · best 120</text>
+<text x="207.8" y="34" fill="#e8e3d9" font-size="15" font-weight="400" text-anchor="start">[ Battleship ]</text>
+<text x="345.7" y="34" fill="#e8e3d9" font-size="15" font-weight="400" text-anchor="start">[ Pomodoro ]</text>
+<text x="24" y="60" fill="#59d39a" font-size="15" font-weight="700" text-anchor="start">[ 🤖 Claude deals: On ]</text>
+<text x="245" y="60" fill="#e8e3d9" font-size="15" font-weight="400" text-anchor="start">[ 💖 Sponsor ]</text>
 <g>
 </g>
 <rect x="24" y="86" width="92" height="54" fill="none" stroke="#f4c430" stroke-width="3"/>

@@ -1,6 +1,6 @@
 {
   "name": "terminal-slots",
-  "description": "Terminal Slots: slots, video poker and a Pomodoro timer in a Claude Code side pane",
+  "description": "Terminal Slots: slots, video poker, Battleship and a Pomodoro timer in a Claude Code side pane",
   "owner": {
     "name": "altoption"
   },
@@ -8,7 +8,7 @@
     {
       "name": "terminal-slots",
       "source": "./plugin",
-      "description": "Slots, video poker and a Pomodoro timer in a side pane; Claude's busy turns play too. Runs locally."
+      "description": "Slots, video poker, Battleship and a Pomodoro timer in a side pane; Claude's busy turns play too. Runs locally."
     }
   ]
 }
