@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { renderCards, renderReels } from '../hooks/ascii'
 import { brier, isGithubPage, isSafeHost, testOutcome } from '../hooks/game'
+import { isPomo, newPomo, nextPomo, progressBar } from '../hooks/pomodoro'
 
 const GRID = [
   ['hay', 'star', 'lantern'],
@@ -61,6 +62,7 @@ const PAIR = { dealt: ['As', 'Ah', '3c', 'Kd', '7s'], bet: 10, made: 'Pair of Ac
 const fakeHost = (on: On) => {
   const seen: string[] = []
   const opened: string[] = []
+  const toasts: string[] = []
   const server = {
     balance: 1000,
     openHand: null as null | typeof PAIR,
@@ -113,13 +115,13 @@ const fakeHost = (on: On) => {
     if (path === '/v1/logout') return reply(200, { loggedOut: true })
     return reply(404, { error: 'no route' })
   })
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', (_, e) => (toasts.push(JSON.stringify(e)), { value: undefined }))
   on('ui.open', (_, e) => (opened.push(e.id), { value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('tool.register', () => ({ value: { tool: 'mcp__terminal-slots__wager' } }))
   on('command.register', () => ({ value: { command: 'slots' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  return { seen, server, opened }
+  return { seen, server, opened, toasts }
 }
 
 
@@ -566,5 +568,96 @@ test('while free tokens recharge, the button is a countdown that ticks down, the
   expect((await ui.find({ type: 'Text', text: /Free tokens in/ }))?.text).toBe('[ 🎁 Free tokens in 2h 12m ]')
   await clock.advance((2 * 60 + 12) * 60_000)
   expect(await ui.find({ type: 'Button', key: 'loot' } as never)).toBeTruthy()
+  await ui.unmount()
+})
+
+const MIN = 60_000
+const text = async (ui: { find: (q: never) => Promise<unknown> }, re: RegExp) =>
+  ((await ui.find({ type: 'Text', text: re } as never)) as { text?: string } | undefined)?.text
+
+test('pomodoro rules: four focus sessions earn the long break; a skipped one counts for nothing', async () => {
+  let p = newPomo()
+  for (let i = 1; i <= 3; i++) {
+    p = nextPomo(p, 0, true)
+    expect([p.phase, p.round, p.today]).toEqual(['short', i, i])
+    p = nextPomo(p, 0, true)
+    expect(p.phase).toBe('focus')
+  }
+  expect(nextPomo(p, 0, false)).toMatchObject({ phase: 'short', round: 3, today: 3 }) // skipped
+  p = nextPomo(p, 0, true)
+  expect([p.phase, p.round, p.leftMs]).toEqual(['long', 4, 15 * MIN])
+  p = nextPomo(p, 0, true)
+  expect([p.phase, p.round, p.today]).toEqual(['focus', 0, 4])
+  // A new day starts the count again.
+  expect(nextPomo(p, 2 * 24 * 60 * MIN, true).today).toBe(1)
+  expect(progressBar({ ...newPomo(), endsAt: 12.5 * MIN }, 0, 10)).toBe('█████░░░░░')
+  for (const bad of [null, 42, {}, { ...newPomo(), phase: 'nap' }, { ...newPomo(), leftMs: -1 }, { ...newPomo(), endsAt: 'soon' }]) {
+    expect(isPomo(bad)).toBe(false)
+  }
+})
+
+test('the Pomodoro tab works signed out: start, pause, resume, and a toast when focus ends', async ($, on) => {
+  mock.store(on)
+  const clock = mock.clock(on)
+  const host = fakeHost(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-pomodoro' })
+  expect(await text(ui, /Focus$/)).toBe('🍅 Focus')
+  expect(await text(ui, /^\d+:\d\d$/)).toBe('25:00')
+  await ui.press({ key: 'pomo-start' })
+  await clock.advance(MIN)
+  expect(await text(ui, /^\d+:\d\d$/)).toBe('24:00')
+  const band = await $.ui.mount(BAND('terminal'))
+  expect(await band.find({ type: 'Text', text: /🍅 24:00/ })).toBeTruthy()
+  await band.unmount()
+
+  await ui.press({ key: 'pomo-pause' })
+  await clock.advance(10 * MIN)
+  expect(await text(ui, /^\d+:\d\d$/)).toBe('24:00') // paused: no time passes
+  expect(await label(ui, 'pomo-start')).toBe('Resume')
+  await ui.press({ key: 'pomo-start' })
+  await clock.advance(24 * MIN)
+  expect(host.toasts.some(t => /Pomodoro done! Take a 5-minute break/.test(t))).toBe(true)
+  expect(await text(ui, /break$/)).toBe('☕ Short break')
+  expect(await text(ui, /^\d+:\d\d$/)).toBe('5:00')
+  expect(await text(ui, /1 today/)).toBeTruthy()
+  expect(await label(ui, 'pomo-start')).toBe('Start') // the break waits for the player
+
+  await ui.press({ key: 'pomo-skip' })
+  expect(await text(ui, /Focus$/)).toBe('🍅 Focus')
+  await ui.press({ key: 'pomo-start' })
+  await clock.advance(3 * MIN)
+  await ui.press({ key: 'pomo-reset' })
+  expect(await text(ui, /^\d+:\d\d$/)).toBe('25:00')
+  expect(await label(ui, 'pomo-start')).toBe('Start')
+  await clock.advance(30 * MIN)
+  expect(host.toasts.filter(t => /Pomodoro done/.test(t))).toHaveLength(1) // a reset timer never fires
+  await ui.unmount()
+})
+
+test('a running pomodoro carries on after a restart', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on, { pomo: { ...newPomo(), endsAt: 10 * MIN } })
+  const host = fakeHost(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-pomodoro' })
+  expect(await text(ui, /^\d+:\d\d$/)).toBe('10:00')
+  await clock.advance(10 * MIN)
+  expect(host.toasts.some(t => /Pomodoro done!/.test(t))).toBe(true)
+  await ui.unmount()
+})
+
+test('a pomodoro that ended while Claude Code was closed is finished, and says so', async ($, on) => {
+  const clock = mock.clock(on)
+  await clock.advance(60 * MIN)
+  mock.store(on, { pomo: { ...newPomo(), endsAt: 5 * MIN } })
+  const host = fakeHost(on)
+  await start($)
+  expect(host.toasts.some(t => /Pomodoro done \(while you were away\)/.test(t))).toBe(true)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-pomodoro' })
+  expect(await text(ui, /break$/)).toBe('☕ Short break')
   await ui.unmount()
 })

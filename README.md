@@ -1,7 +1,7 @@
 # Terminal Slots
 
-Slots and video poker in a side pane of [Claude Code](https://code.claude.com), for something to do
-while Claude works. Free tokens, a leaderboard, and nothing to buy.
+Slots, video poker and a Pomodoro timer in a side pane of [Claude Code](https://code.claude.com), for
+something to do while Claude works. Free tokens, a leaderboard, and nothing to buy.
 
 An independent plugin by [altoption](https://github.com/altoption). Not made or endorsed by Anthropic.
 
@@ -51,6 +51,9 @@ What changed in each release: [CHANGELOG](CHANGELOG.md).
 - **Slots**: Barn of Fortune, 5 reels × 3 rows, 10 lines. Bets 10/20/50/100.
 - **Poker**: Royal Draw, Jacks or Better. Deal, then click a card (or press 1–5) to hold it, then
   DRAW. A dealt hand that already pays starts held, as on a real machine. Bets 5/10/25/50/100.
+- **Pomodoro**: 25 minutes of focus, a 5-minute break, and a 15-minute break after every fourth.
+  Start, Pause, Reset or Skip; a notice pops up when each one ends, and the time left shows above the
+  prompt. It works without signing in and keeps running across restarts.
 - **Tokens**: 1,000 when you sign up. **🎁 Free tokens** gives more every 25 minutes, one pomodoro (100 to 10,000). If
   you run out, a free refill (+500) is available once a day.
 - **💰 I'm Rich :)** opens the creator's GitHub Sponsors page, if you'd like to tip. It buys no tokens.
@@ -79,7 +82,7 @@ Everything it does, so you can check it against the code in [`plugin/hooks/`](pl
 |---|---|---|
 | Talks to one server | `register.tsx` `api()` | Only `https://terminal-slots.altoption.workers.dev` (fixed in the code). Sends game actions (spin, deal, draw, free tokens, refill), sign-in, and your session token. Nothing about your code, prompts or Claude's work. |
 | Opens your browser | `signIn()`, `imRich()` | Only GitHub's own pages: the sign-in page, and `github.com/sponsors/altoption` when you press I'm Rich. |
-| Stores locally | Claude Code's plugin store | Your session token for the game server, and Claude's calibration stats. |
+| Stores locally | Claude Code's plugin store | Your session token for the game server, Claude's calibration stats, and your Pomodoro timer. |
 | Gives Claude one tool | `wager` | Claude can record how likely it thinks a test run is to pass before running it. The plugin doesn't change Claude's system prompt. |
 | Watches tool calls | `tool.call` hook | Reads the text of Bash commands **locally** to spot test runs (`npm test`, `pytest`, …) and whether they passed, to score Claude's calibration (a Brier score shown in the pane). Never sent anywhere; never blocks or changes a tool call. |
 

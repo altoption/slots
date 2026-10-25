@@ -1,7 +1,7 @@
 {
   "name": "terminal-slots",
-  "version": "0.10.2",
-  "description": "Terminal Slots for Claude Code: slots and video poker in a side pane, free tokens, GitHub sign-in",
+  "version": "0.11.0",
+  "description": "Terminal Slots for Claude Code: slots, video poker and a Pomodoro timer in a side pane, free tokens, GitHub sign-in",
   "author": {
     "name": "altoption",
     "url": "https://github.com/altoption"

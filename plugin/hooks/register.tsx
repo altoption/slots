@@ -4,6 +4,10 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { CasinoView } from '../types'
 import { cardFace, cardText, isRedCard, randomGrid, renderReels } from './ascii'
 import { brier, isGithubPage, isSafeHost, newCalibration, testOutcome, type Calibration } from './game'
+import {
+  clockText, dayOf, isPomo, isRunning, newPomo, nextPomo, PHASE_LABEL, pausePomo, POMO_MS, pomoLeft, progressBar, resetPomo, ROUND, startPomo,
+} from './pomodoro'
+import type { Pomo } from '../types'
 
 const PANE = 'slots'
 const WAGER = 'mcp__terminal-slots__wager'
@@ -40,9 +44,10 @@ const view = atom(
     now: 0,
     slots: NEW_SLOTS(),
     poker: NEW_POKER(),
+    pomo: newPomo(),
     calib: { settled: 0, brier: null, pending: null },
   } as CasinoView,
-  { shape: 'view-9' },
+  { shape: 'view-10' },
 )
 
 // Fixed: the mod only ever talks to the Terminal Slots host. Edit here to develop against localhost.
@@ -390,6 +395,60 @@ async function setTab($: EngineInterface, tab: CasinoView['tab']): Promise<void>
   await update($, view, v => ({ ...v, tab, message: '', showNudge: false }))
 }
 
+// ---- Pomodoro (local, no tokens) ------------------------------------------------------------------
+
+// Each change bumps the run, so a timer from an earlier start, pause or reload does nothing when it fires.
+let pomoRun = 0
+let pomoTicker: { cancel: () => void } | null = null
+
+// Applies a change, saves it, and (re)arms the end-of-phase timer and the once-a-second countdown.
+async function setPomo($: EngineInterface, change: (p: Pomo, now: number) => Pomo): Promise<Pomo> {
+  const now = await $.clock.now()
+  let next = newPomo()
+  await update($, view, v => {
+    next = change(v.pomo, now)
+    return { ...v, now, pomo: next }
+  })
+  await $.store.set('pomo', next)
+  const run = ++pomoRun
+  pomoTicker?.cancel()
+  pomoTicker = null
+  if (next.endsAt !== null) {
+    $.clock.after(Math.max(0, next.endsAt - now), () => void finishPomo($, run))
+    pomoTicker = $.clock.every(1000, () => void tickPomo($, run))
+  }
+  return next
+}
+
+async function tickPomo($: EngineInterface, run: number): Promise<void> {
+  if (run !== pomoRun) return
+  const now = await $.clock.now()
+  await update($, view, v => ({ ...v, now }))
+}
+
+// The phase ran out: move on to the next one (stopped) and say so, wherever the player is.
+async function finishPomo($: EngineInterface, run: number, wasAway = false): Promise<void> {
+  if (run !== pomoRun) return
+  const before = (await read($, view)).pomo
+  const p = await setPomo($, (p, now) => nextPomo(p, now, true))
+  const v = await read($, view)
+  const tokens = v.account && v.account.nextLootboxMs <= v.now ? ' 🎁 Free tokens are ready.' : ''
+  const away = wasAway ? ' (while you were away)' : ''
+  $.ui.toast(
+    before.phase === 'focus'
+      ? `🍅 Pomodoro done${away}! Take a ${POMO_MS[p.phase] / 60_000}-minute break.${tokens}`
+      : `${PHASE_LABEL[before.phase]} is over${away}. Ready to focus?`,
+  )
+}
+
+// After a restart: the saved timer carries on, or finishes now if it ran out while Claude Code was closed.
+async function restorePomo($: EngineInterface): Promise<void> {
+  const saved = await $.store.get('pomo')
+  const p = isPomo(saved) ? saved : newPomo()
+  await setPomo($, () => p)
+  if (p.endsAt !== null && p.endsAt <= (await $.clock.now())) await finishPomo($, pomoRun, true)
+}
+
 // ---- calibration (local, no tokens) ----------------------------------------------------------------
 
 async function calibrate($: EngineInterface, fn: (c: Calibration) => void): Promise<Calibration> {
@@ -419,6 +478,8 @@ export const register: Register = on => {
     })
     await $.command.register({ name: 'slots', description: 'Show or hide Terminal Slots; "/slots logout" to sign out' })
     await calibrate($, () => undefined)
+    // Like the clock, the timer must never stop the session from starting.
+    await restorePomo($).catch(() => undefined)
     // A reload re-runs this but drops timers: nothing can still be spinning or in flight.
     inFlight = false
     // The countdown clock is cosmetic: it must never stop the session from starting.
@@ -458,7 +519,9 @@ export const register: Register = on => {
     return (
       <Box>
         <Text>🎰 Terminal Slots</Text>
-        <Text dimColor>{v.account ? ` · ${v.account.balance.toLocaleString()} tokens ` : ' '}</Text>
+        <Text dimColor>{v.account ? ` · ${v.account.balance.toLocaleString()} tokens` : ''}</Text>
+        {isRunning(v.pomo) ? <Text dimColor>{` · ${PHASE_LABEL[v.pomo.phase].split(' ')[0]} ${clockText(pomoLeft(v.pomo, v.now))}`}</Text> : null}
+        <Text> </Text>
         <Button key="slots-toggle" label={v.isPaneOpen ? 'Hide' : 'Show'} onPress={() => void togglePane($)} />
       </Box>
     )
@@ -479,6 +542,8 @@ export const register: Register = on => {
           <Button key="tab-slots" variant={v.tab === 'slots' ? 'primary' : undefined} label="Slots" onPress={() => void setTab($, 'slots')} />
           <Text> </Text>
           <Button key="tab-poker" variant={v.tab === 'poker' ? 'primary' : undefined} label="Poker" onPress={() => void setTab($, 'poker')} />
+          <Text> </Text>
+          <Button key="tab-pomodoro" variant={v.tab === 'pomodoro' ? 'primary' : undefined} label="Pomodoro" onPress={() => void setTab($, 'pomodoro')} />
         </Box>
         {v.account ? (
           <Box>
@@ -529,6 +594,45 @@ export const register: Register = on => {
           <Button key="rich-nudge" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
         </Box>
       ) : null
+
+    // The timer needs no account: it runs on this machine and never touches tokens.
+    if (v.tab === 'pomodoro') {
+      const p = v.pomo
+      const left = pomoLeft(p, v.now)
+      const isFull = !isRunning(p) && p.leftMs === POMO_MS[p.phase]
+      const barWidth = Math.max(10, Math.min(40, columns - 2))
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text> </Text>
+          <Text bold color={p.phase === 'focus' ? RED : 'success'}>
+            {PHASE_LABEL[p.phase]}
+          </Text>
+          <Text bold>{clockText(left)}</Text>
+          <Text color={p.phase === 'focus' ? RED : 'success'}>{progressBar(p, v.now, barWidth)}</Text>
+          <Text> </Text>
+          <Box>
+            {isRunning(p) ? (
+              <Button key="pomo-pause" label="Pause" onPress={() => void setPomo($, pausePomo)} />
+            ) : (
+              <Button key="pomo-start" variant="primary" label={isFull ? 'Start' : 'Resume'} onPress={() => void setPomo($, startPomo)} />
+            )}
+            <Text> </Text>
+            <Button key="pomo-reset" label="Reset" onPress={() => void setPomo($, resetPomo)} />
+            <Text> </Text>
+            <Button key="pomo-skip" label="Skip" onPress={() => void setPomo($, (p, now) => nextPomo(p, now, false))} />
+          </Box>
+          <Text> </Text>
+          <Text>
+            {'🍅'.repeat(Math.min(p.round, ROUND))}
+            <Text dimColor>{'○'.repeat(Math.max(0, ROUND - p.round))}</Text>
+            <Text dimColor>{` · ${p.day === dayOf(v.now) ? p.today : 0} today`}</Text>
+          </Text>
+          <Text dimColor>25 min focus · 5 min break · 15 min after every 4th</Text>
+          <Text dimColor>Runs while you work, even with the pane hidden.</Text>
+        </Box>
+      )
+    }
 
     if (!v.account) {
       return (

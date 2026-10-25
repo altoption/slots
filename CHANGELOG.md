@@ -2,6 +2,12 @@
 
 Update with `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.11.0] - 2026-10-25
+
+### Added
+- A **Pomodoro** tab: 25 minutes of focus, short and long breaks, and a notice when each one ends.
+  The time left shows above the prompt. No sign-in needed.
+
 ## [0.10.2] - 2026-10-25
 
 ### Changed
