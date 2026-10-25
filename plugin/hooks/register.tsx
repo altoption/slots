@@ -477,12 +477,9 @@ export const register: Register = on => {
             )}
             <Text> </Text>
             <Button key="loot" label="💰 I'm Rich :)" onPress={() => void openLootbox($)} />
-            {v.account.isMember ? null : (
-              <>
-                <Text> </Text>
-                <Button key="support" label="★ Support" onPress={() => void openMembership($)} />
-              </>
-            )}
+            {/* Optional items are direct children of the row: a fragment would start a new line. */}
+            {v.account.isMember ? null : <Text> </Text>}
+            {v.account.isMember ? null : <Button key="support" label="★ Support" onPress={() => void openMembership($)} />}
           </Box>
         ) : null}
       </Box>
@@ -494,11 +491,9 @@ export const register: Register = on => {
         <Box>
           <Text bold>Out of tokens? </Text>
           <Button key="refill" variant="primary" label="🆓 Free refill (+500)" onPress={() => void refill($)} />
+          {v.account.isMember ? null : <Text> </Text>}
           {v.account.isMember ? null : (
-            <>
-              <Text> </Text>
-              <Button key="support-broke" label="★ Support the creator" onPress={() => void openMembership($)} />
-            </>
+            <Button key="support-broke" label="★ Support the creator" onPress={() => void openMembership($)} />
           )}
         </Box>
       ) : null

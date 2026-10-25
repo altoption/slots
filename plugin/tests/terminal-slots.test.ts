@@ -516,3 +516,25 @@ test("Claude's calibration line stays hidden until Claude has made a prediction"
   expect(await ui.find({ type: 'Text', text: /calibration|Brier/ })).toBeFalsy()
   await ui.unmount()
 })
+
+// The row a keyed Button sits in: the element whose own children include it.
+const rowOf = (tree: unknown, key: string) => {
+  let row: Node | undefined
+  walk(tree, n => {
+    if ((n.children ?? []).some(c => (c as Node)?.type === 'Button' && (c as Node).props?.key === key)) row = n
+  })
+  return row
+}
+const keysIn = (row: Node | undefined) => (row?.children ?? []).map(c => (c as Node)?.props?.key).filter(Boolean)
+
+test('Support buttons sit in the same row as their neighbours, never on a line of their own', async ($, on) => {
+  signedIn(on)
+  const host = fakeHost(on)
+  host.server.balance = 4 // broke: the refill row shows its support button too
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  const tree = await ui.drawn()
+  expect(keysIn(rowOf(tree, 'loot'))).toEqual(expect.arrayContaining(['loot', 'support']))
+  expect(keysIn(rowOf(tree, 'refill'))).toEqual(expect.arrayContaining(['refill', 'support-broke']))
+  await ui.unmount()
+})

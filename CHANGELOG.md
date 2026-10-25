@@ -3,6 +3,12 @@
 Every release of the Terminal Slots plugin. Install or update with
 `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.9.2] - 2026-10-25
+
+### Fixed
+- The ★ Support buttons sat on a line of their own, under I'm Rich and the free refill; they're back
+  in the same row.
+
 ## [0.9.1] - 2026-10-25
 
 ### Fixed
