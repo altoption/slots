@@ -19,7 +19,9 @@ claude plugin marketplace add altoption/slots
 claude plugin install terminal-slots@terminal-slots
 ```
 
-Start `claude`, type `/slots`, and press **Sign in with GitHub**. Or use the one-click button on
+Start `claude`, type `/slots`, and press **Sign in with GitHub**. To update later:
+`claude plugin update terminal-slots@terminal-slots`, then restart Claude Code. What changed:
+[CHANGELOG](CHANGELOG.md). Or use the one-click button on
 [the website](https://terminal-slots.altoption.workers.dev).
 
 **Install trouble?**

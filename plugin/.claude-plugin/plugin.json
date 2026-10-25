@@ -1,6 +1,18 @@
 {
   "name": "terminal-slots",
-  "version": "0.6.1",
-  "description": "Terminal Slots for Claude Code: slots and video poker in a side pane, free tokens and loot boxes, GitHub sign-in",
+  "version": "0.6.2",
+  "description": "Terminal Slots for Claude Code: slots and video poker in a side pane, free tokens, GitHub sign-in",
+  "author": {
+    "name": "altoption",
+    "url": "https://github.com/altoption"
+  },
+  "homepage": "https://terminal-slots.altoption.workers.dev",
+  "repository": "https://github.com/altoption/slots",
+  "keywords": [
+    "slots",
+    "poker",
+    "game",
+    "fun"
+  ],
   "types": "./types/index.d.ts"
 }

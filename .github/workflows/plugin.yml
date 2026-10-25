@@ -1,0 +1,39 @@
+name: plugin
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version bumped and CHANGELOG updated when plugin/ changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          scripts/check-release.sh "$base"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code (no login needed to validate and test)
+        run: npm install -g @anthropic-ai/claude-code@2.1.310
+
+      - name: Validate the marketplace and plugin
+        run: claude plugin validate .
+
+      - name: Run the plugin's tests
+        run: claude plugin test plugin
