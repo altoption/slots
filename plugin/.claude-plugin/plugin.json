@@ -1,6 +1,6 @@
 {
   "name": "terminal-slots",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Terminal Slots for Claude Code: slots and video poker in a side pane, free tokens, GitHub sign-in",
   "author": {
     "name": "altoption",

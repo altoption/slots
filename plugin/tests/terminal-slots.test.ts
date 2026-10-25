@@ -67,6 +67,7 @@ const fakeHost = (on: On) => {
     balance: 1000,
     openHand: null as null | typeof PAIR,
     isDown: false,
+    isMember: false,
     dealStatus: 200,
     drawStatus: 200,
   }
@@ -75,7 +76,7 @@ const fakeHost = (on: On) => {
     balance: server.balance,
     nextLootboxMs: 0,
     openHand: server.openHand,
-    membership: { isMember: false },
+    membership: { isMember: server.isMember },
     canRefill: server.balance < 10,
   })
   on('http.fetch', (_, e) => {
@@ -414,5 +415,33 @@ test('the reels spin on the frame clock, then stop left to right before the win 
   tree = await ui.drawn({ in: 'reels' } as never)
   expect(cellOf(tree, 4, 0).border).toBe(undefined)
   expect(cellOf(tree, 0, 0)).toMatchObject({ border: 'warning', bold: true })
+  await ui.unmount()
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`a supporter's name is drawn in rainbow letters with a gold star (${surface})`, async ($, on) => {
+    signedIn(on)
+    const host = fakeHost(on)
+    host.server.isMember = true
+    await start($)
+    const ui = await $.ui.mount(PANE(surface))
+    const texts = textsOf(await ui.drawn())
+    const i = texts.findIndex(t => t.text === 'o')
+    const letters = texts.slice(i, i + 4)
+    expect(letters.map(t => t.text).join('')).toBe('octo')
+    expect(new Set(letters.map(t => t.color)).size).toBe(4) // each letter its own colour
+    expect(texts.find(t => t.text.includes('★'))?.color).toBe('warning')
+    await ui.unmount()
+  })
+}
+
+test("a non-supporter's name stays plain, with no star", async ($, on) => {
+  signedIn(on)
+  fakeHost(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  const texts = textsOf(await ui.drawn())
+  expect(texts.some(t => t.text.includes('octo'))).toBe(true)
+  expect(texts.some(t => t.text.includes('★') || t.text.includes('⭐'))).toBe(false)
   await ui.unmount()
 })

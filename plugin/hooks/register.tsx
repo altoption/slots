@@ -11,6 +11,8 @@ const SLOT_BETS = [10, 20, 50, 100]
 const POKER_BETS = [5, 10, 25, 50, 100]
 const BIG_WIN = 20 // × bet
 const RED = 'error' // the theme's red: hearts and diamonds
+// A supporter's name, one colour per letter, the way Claude Code draws "ultrathink".
+const RAINBOW = ['#E5534B', '#E8853D', '#E5C07B', '#7EC77E', '#5DA9E9', '#9D8FE0', '#D97FC9']
 
 
 // Bump the tag when CasinoView's fields change: a reload declines the old value.
@@ -452,7 +454,20 @@ export const register: Register = on => {
         {v.account ? (
           <Box>
             <Text bold>{v.account.balance.toLocaleString()} tokens</Text>
-            <Text dimColor> · {v.account.login}{v.account.isMember ? ' ⭐' : ''} </Text>
+            <Text dimColor> · </Text>
+            {v.account.isMember ? (
+              <>
+                {[...v.account.login].map((ch, n) => (
+                  <Text key={`name-${n}`} bold color={RAINBOW[n % RAINBOW.length]}>
+                    {ch}
+                  </Text>
+                ))}
+                <Text color="warning"> ★</Text>
+              </>
+            ) : (
+              <Text dimColor>{v.account.login}</Text>
+            )}
+            <Text> </Text>
             <Button key="loot" label="💰 I'm Rich :)" onPress={() => void openLootbox($)} />
             {v.account.isMember ? null : (
               <>
@@ -617,7 +632,7 @@ export const register: Register = on => {
           <Text> </Text>
           <Button key="poker-bet" label={`Bet ${v.poker.bet}`} onPress={() => void cycleBet($, 'poker')} />
         </Box>
-        <Text dimColor>Royal Draw · Jacks or Better · click a card (or press 1-5) to hold it, then DRAW</Text>
+        <Text dimColor>Royal Draw · click a card or press 1-5 to hold</Text>
         {calib}
       </Box>
     )

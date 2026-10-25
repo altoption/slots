@@ -3,6 +3,15 @@
 Every release of the Terminal Slots plugin. Install or update with
 `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.8.0] - 2026-10-25
+
+### Added
+- Supporters' names are drawn in rainbow letters with a gold ★, the way Claude Code draws "ultrathink".
+
+### Changed
+- The supporter star is a solid ★, which every terminal font draws the same (⭐ showed as ☆ in some).
+- Shorter poker hint, so it fits narrow panes.
+
 ## [0.7.0] - 2026-10-25
 
 ### Changed

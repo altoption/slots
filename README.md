@@ -98,9 +98,9 @@ balance appear on the public leaderboard.
 ## Support
 
 If you enjoy it, you can chip in through GitHub Sponsors (pay what you can, from $1/month). It's a
-thank-you, not a purchase: supporters get a ⭐ and gold cards; tokens stay free and the same for
-everyone. Sponsor at [github.com/sponsors/altoption](https://github.com/sponsors/altoption), using the same GitHub account you
-play with; your ⭐ appears within a minute.
+thank-you, not a purchase: supporters get their name in rainbow letters with a gold ★, and gold
+cards; tokens stay free and the same for everyone. Sponsor at [github.com/sponsors/altoption](https://github.com/sponsors/altoption), using the same GitHub account you
+play with; your ★ appears within a minute.
 
 ## Feedback
 
