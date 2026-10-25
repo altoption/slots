@@ -1,7 +1,9 @@
 # Terminal Slots
 
 Slots, video poker and a Pomodoro timer in a side pane of [Claude Code](https://code.claude.com), for
-something to do while Claude works. Free tokens, a leaderboard, and nothing to buy.
+something to do while Claude works. Claude's own work plays too: a busy turn spins the reels or deals a
+hand, and a commit, a pull request or tests passing again earn a bonus. Everything runs on your
+machine. No sign-in, no tokens, nothing to buy.
 
 An independent plugin by [altoption](https://github.com/altoption). Not made or endorsed by Anthropic.
 
@@ -19,7 +21,7 @@ claude plugin marketplace add https://github.com/altoption/slots.git
 claude plugin install terminal-slots@terminal-slots
 ```
 
-Then start `claude`, type `/slots`, and press **Sign in with GitHub**. The
+Then start `claude`; the pane opens on the right (or type `/slots`). The
 [website](https://terminal-slots.altoption.workers.dev) has a one-click button that types the install
 request into Claude Code for you.
 
@@ -48,31 +50,30 @@ What changed in each release: [CHANGELOG](CHANGELOG.md).
 
 ## Play
 
-- **Slots**: Barn of Fortune, 5 reels × 3 rows, 10 lines. Bets 10/20/50/100.
-- **Poker**: Royal Draw, Jacks or Better. Deal, then click a card (or press 1–5) to hold it, then
-  DRAW. A dealt hand that already pays starts held, as on a real machine. Bets 5/10/25/50/100.
+- **Slots**: Barn of Fortune, 5 reels × 3 rows, 10 lines. Press **SPIN** as often as you like.
+- **Poker**: Royal Draw, Jacks or Better. DEAL, then click a card (or press 1–5) to hold it, then
+  DRAW. A dealt hand that already pays starts held, as on a real machine.
+- **Claude plays too**: when Claude finishes a turn that used 3 or more tools, the open tab plays once:
+  Slots spins; Poker deals, and draws by itself after 4 seconds unless you change a hold. Nothing plays
+  on the Pomodoro tab or while the pane is hidden.
+- **🏆 Bonus**: when Claude makes a commit, opens a pull request (`gh pr create`), or gets failing tests
+  passing again, your next spin or deal is a bonus: a spin that pays at least 10× the bet, or a deal of
+  Three of a Kind or better.
 - **Pomodoro**: 25 minutes of focus, a 5-minute break, and a 15-minute break after every fourth.
   Start, Pause, Reset or Skip; a notice pops up when each one ends, and the time left shows above the
-  prompt. It works without signing in and keeps running across restarts.
-- **Tokens**: 1,000 when you sign up. **🎁 Free tokens** gives more every 25 minutes, one pomodoro (100 to 10,000). If
-  you run out, a free refill (+500) is available once a day.
-- **💰 I'm Rich :)** opens the creator's GitHub Sponsors page, if you'd like to tip. It buys no tokens.
-- A band above the prompt shows your balance, with **Show/Hide** for the pane. `/slots logout` signs out.
+  prompt. It keeps running across restarts.
+- Wins are points, for fun: nothing is bet, bought or paid out.
+- A band above the prompt has **Show/Hide** for the pane.
 
-## Fair play: what you can check
+## How the games work
 
-- **The server decides every outcome.** The plugin sends your bet; the server picks the random seed
-  and runs the game engine. The plugin only draws the result, so it can't be tweaked to win.
-- The games run on slots-sdk, the author's slot engine (not public yet), where every spin is a
-  function of its seed and can be replayed.
-  - Barn of Fortune publishes a 97.48% return. 1.35 points of that come from a free-spins feature
-    this plugin **doesn't run yet**, so the base game is 96.13%. Wins are paid in whole tokens,
-    rounded down, which costs a little more: measured over 200,000 spins per bet size, players get
-    about **94.4–96.4%** depending on the bet.
-  - Royal Draw uses the 9/6 Jacks or Better paytable. Video poker's return depends on which cards
-    you hold.
-- **Tokens have no value.** They can't be bought, sold, transferred or cashed out, and nothing pays
-  out. For entertainment only.
+- The games run on slots-sdk, the author's MIT-licensed slot engine, bundled in
+  [`plugin/hooks/engine/`](plugin/hooks/engine). Every play is a function of a random seed, so any
+  play can be replayed from its seed.
+- Barn of Fortune publishes a 97.48% return, 1.35 points of it from a free-spins feature this plugin
+  doesn't run, so the base game is 96.13%. Royal Draw uses the 9/6 Jacks or Better paytable.
+- **Bonus plays are picked to win**: the plugin tries random seeds until one meets the bonus bar
+  (up to 1,500 tries, keeping the best). They are a reward, not part of the published returns.
 
 ## What the plugin does on your machine
 
@@ -80,31 +81,23 @@ Everything it does, so you can check it against the code in [`plugin/hooks/`](pl
 
 | What | Where | Details |
 |---|---|---|
-| Talks to one server | `register.tsx` `api()` | Only `https://terminal-slots.altoption.workers.dev` (fixed in the code). Sends game actions (spin, deal, draw, free tokens, refill), sign-in, and your session token. Nothing about your code, prompts or Claude's work. |
-| Opens your browser | `signIn()`, `imRich()` | Only GitHub's own pages: the sign-in page, and `github.com/sponsors/altoption` when you press I'm Rich. |
-| Stores locally | Claude Code's plugin store | Your session token for the game server, Claude's calibration stats, and your Pomodoro timer. |
+| Network | none | The plugin makes no network calls. |
+| Opens your browser | `sponsor()` | Only `github.com/sponsors/altoption`, when you press 💖 Sponsor. |
+| Stores locally | Claude Code's plugin store | Your points, a waiting bonus, your Pomodoro timer, and Claude's calibration stats. |
 | Gives Claude one tool | `wager` | Claude can record how likely it thinks a test run is to pass before running it. The plugin doesn't change Claude's system prompt. |
-| Watches tool calls | `tool.call` hook | Reads the text of Bash commands **locally** to spot test runs (`npm test`, `pytest`, …) and whether they passed, to score Claude's calibration (a Brier score shown in the pane). Never sent anywhere; never blocks or changes a tool call. |
+| Watches tool calls | `tool.call` hook | Counts Claude's tool calls per turn, and reads the text of Bash commands **locally** to spot test runs, commits and `gh pr create`. Never sent anywhere; never blocks or changes a tool call. |
+| Watches turns end | `turn.complete` hook | To play once after a busy turn. It never changes Claude's answer. |
 
 ### Claude's calibration
 
 Before a test run, Claude records how likely it thinks the tests are to pass. Afterwards the pane
-shows how well-calibrated it was (Brier score: 0 is perfect, 0.25 is a coin flip). No tokens are at
-stake. It's a light way to see whether "this should work ✅" means anything.
-
-## What the server stores
-
-Your GitHub user ID and login (from sign-in), a hash of your session token (never the token itself),
-and your game records: balance, a ledger of every token movement, and an open poker hand. GitHub's
-own access token is used once at sign-in to learn who you are, then discarded. Your login and
-balance appear on the public leaderboard.
+shows how well-calibrated it was (Brier score: 0 is perfect, 0.25 is a coin flip). It's a light way to
+see whether "this should work ✅" means anything.
 
 ## Support
 
-If you enjoy it, you can chip in through GitHub Sponsors (pay what you can, from $1/month). It's a
-thank-you, not a purchase: supporters get their name in rainbow letters with a gold ★, and gold
-cards; tokens stay free and the same for everyone. Sponsor at [github.com/sponsors/altoption](https://github.com/sponsors/altoption), using the same GitHub account you
-play with; your ★ appears within a minute.
+If you enjoy it, **💖 Sponsor** opens [github.com/sponsors/altoption](https://github.com/sponsors/altoption)
+(pay what you can). It's a thank-you: it unlocks and buys nothing, and the game is the same for everyone.
 
 ## Feedback
 

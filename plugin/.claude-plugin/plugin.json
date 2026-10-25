@@ -1,12 +1,12 @@
 {
   "name": "terminal-slots",
-  "version": "0.11.0",
-  "description": "Terminal Slots for Claude Code: slots, video poker and a Pomodoro timer in a side pane, free tokens, GitHub sign-in",
+  "version": "1.0.0",
+  "description": "Terminal Slots for Claude Code: slots, video poker and a Pomodoro timer in a side pane; Claude's busy turns play too. Runs locally.",
   "author": {
     "name": "altoption",
     "url": "https://github.com/altoption"
   },
-  "homepage": "https://terminal-slots.altoption.workers.dev",
+  "homepage": "https://github.com/altoption/slots",
   "repository": "https://github.com/altoption/slots",
   "keywords": [
     "slots",

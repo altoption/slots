@@ -14,9 +14,6 @@ const TEST = /\b(vitest|jest|pytest|mocha|playwright test|dotnet test|go test|ca
 export const testOutcome = (command: string, isError: boolean): Outcome | null =>
   TEST.test(command) ? (isError ? 'fail' : 'pass') : null
 
-// Only https, or plain http to this machine, may carry the session token.
-export const isSafeHost = (url: string): boolean => /^https:\/\/[^\s/]+/.test(url) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url)
-
 // Only GitHub's own https pages may be handed to the OS launcher.
 export const isGithubPage = (uri: unknown): uri is string => {
   if (typeof uri !== 'string' || uri.startsWith('-')) return false

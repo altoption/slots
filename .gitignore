@@ -3,3 +3,5 @@ node_modules/
 *.log
 plugin/.claude-plugin/types/
 plugin/tsconfig.json
+tasks/
+docs/DECISIONS.md

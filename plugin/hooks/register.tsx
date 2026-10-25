@@ -1,379 +1,220 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CasinoView } from '../types'
+import type { Bonus, CasinoView, Pomo } from '../types'
 import { cardFace, cardText, isRedCard, randomGrid, renderReels } from './ascii'
-import { brier, isGithubPage, isSafeHost, newCalibration, testOutcome, type Calibration } from './game'
+import { brier, isGithubPage, newCalibration, testOutcome, type Calibration } from './game'
+import { bonusDeal, bonusSpin, dealFrom, drawFrom, milestoneOf, newSeed, spinFrom, type Deal, type Spin } from './local'
 import {
   clockText, dayOf, isPomo, isRunning, newPomo, nextPomo, PHASE_LABEL, pausePomo, POMO_MS, pomoLeft, progressBar, resetPomo, ROUND, startPomo,
 } from './pomodoro'
-import type { Pomo } from '../types'
 
 const PANE = 'slots'
 const WAGER = 'mcp__terminal-slots__wager'
-const SLOT_BETS = [10, 20, 50, 100]
-const POKER_BETS = [5, 10, 25, 50, 100]
-const BIG_WIN = 20 // × bet
+const BIG_WIN = 200 // points: 20× the bet
 const RED = 'error' // the theme's red: hearts and diamonds
-// A supporter's name, one colour per letter, the way Claude Code draws "ultrathink".
-const RAINBOW = ['#E5534B', '#E8853D', '#E5C07B', '#7EC77E', '#5DA9E9', '#9D8FE0', '#D97FC9']
-
+// A Claude turn that used at least this many tools plays once on the open tab.
+const TOOLS_PER_PLAY = 3
+const AUTO_DRAW_MS = 4000
 
 // Bump the tag when CasinoView's fields change: a reload declines the old value.
-const NEW_SLOTS = (): CasinoView['slots'] => ({ grid: randomGrid(Math.random), bet: 10, win: 0, cells: [], isSpinning: false, message: '' })
+const NEW_SLOTS = (): CasinoView['slots'] => ({ grid: randomGrid(Math.random), win: 0, cells: [], isSpinning: false, isBonus: false, message: '' })
 const NEW_POKER = (): CasinoView['poker'] => ({
   cards: [null, null, null, null, null],
   held: [false, false, false, false, false],
   winning: [],
   phase: 'idle',
-  bet: 10,
+  handId: '',
+  touched: false,
+  isBonus: false,
   result: '',
   win: 0,
   message: '',
 })
+const NEW_STATS = (): CasinoView['stats'] => ({ plays: 0, points: 0, best: 0 })
 const view = atom(
   { plugin: 'terminal-slots', key: 'view' } as const,
   {
     tab: 'slots',
-    account: null,
-    device: null,
     message: '',
-    isBusy: false,
     isPaneOpen: false,
-    showNudge: false,
     now: 0,
+    bonus: null,
+    stats: NEW_STATS(),
     slots: NEW_SLOTS(),
     poker: NEW_POKER(),
     pomo: newPomo(),
     calib: { settled: 0, brier: null, pending: null },
   } as CasinoView,
-  { shape: 'view-10' },
+  { shape: 'view-11' },
 )
-
-// Fixed: the mod only ever talks to the Terminal Slots host. Edit here to develop against localhost.
-const hostUrl = 'https://terminal-slots.altoption.workers.dev'
-
-type ApiResult = { status: number; body: Record<string, any> }
-
-// Every host call: the session token rides in a header, never in the URL or a log.
-async function api($: EngineInterface, method: string, path: string, body?: unknown): Promise<ApiResult> {
-  if (!isSafeHost(hostUrl)) return { status: 0, body: { error: `refusing insecure host ${hostUrl}` } }
-  const token = (await $.store.get('session')) as string | undefined
-  try {
-    const res = await $.http.fetch(hostUrl.replace(/\/$/, '') + path, {
-      method,
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const parsed = JSON.parse(res.text || '{}') as Record<string, any>
-    if (res.status === 401 && token) {
-      await $.store.delete('session')
-      await update($, view, v => ({ ...v, account: null, slots: NEW_SLOTS(), poker: NEW_POKER() }))
-    }
-    return { status: res.status, body: parsed }
-  } catch {
-    return { status: 0, body: { error: `host unreachable: ${hostUrl}` } }
-  }
-}
-
-// Responses can land out of order (a spin waits ~0.9 s before it shows). Each request takes a ticket
-// when it starts; a wallet older than the one already shown is ignored.
-let ticket = 0
-let shownTicket = 0
-const takeTicket = () => ++ticket
-
-const sameCards = (a: readonly (string | null)[], b: readonly string[]) => a.length === b.length && a.every((c, i) => c === b[i])
-
-const heldFrom = (contributing: unknown): boolean[] => [0, 1, 2, 3, 4].map(i => Array.isArray(contributing) && contributing.includes(i))
-
-/**
- * Applies a wallet from the host. When it carries `openHand` (every `/v1/me`-shaped answer does), the
- * pane follows the server: a hand open there is shown (and its paying cards held); a hand the pane
- * still shows as open but the server has finished is closed.
- */
-async function setAccount($: EngineInterface, body: Record<string, any>, at: number): Promise<void> {
-  if (typeof body.login !== 'string' || at < shownTicket) return
-  shownTicket = at
-  await update($, view, v => {
-    let poker = v.poker
-    if ('openHand' in body) {
-      const open = body.openHand as { dealt: string[]; bet: number; made: string | null; contributing: number[] } | null
-      if (open && (v.poker.phase !== 'dealt' || !sameCards(v.poker.cards, open.dealt))) {
-        poker = {
-          ...NEW_POKER(),
-          cards: open.dealt,
-          held: heldFrom(open.contributing),
-          winning: open.contributing ?? [],
-          phase: 'dealt',
-          bet: open.bet,
-          message: open.made ? `Hand resumed. You hold: ${open.made}` : 'Hand resumed. Pick cards to hold, then DRAW.',
-        }
-      } else if (!open && v.poker.phase === 'dealt') {
-        poker = { ...NEW_POKER(), bet: v.poker.bet, message: 'That hand was finished elsewhere. DEAL again.' }
-      }
-    }
-    return {
-      ...v,
-      account: {
-        login: body.login,
-        balance: body.balance,
-        nextLootboxMs: body.nextLootboxMs,
-        isMember: body.membership?.isMember === true,
-        canRefill: body.canRefill === true,
-      },
-      poker,
-    }
-  })
-}
-
-// Re-reads the wallet and any open hand from the server: used after a refused or lost game request.
-async function resync($: EngineInterface): Promise<void> {
-  const at = takeTicket()
-  const me = await api($, 'GET', '/v1/me')
-  if (me.status === 200) await setAccount($, me.body, at)
-}
 
 async function say($: EngineInterface, message: string): Promise<void> {
   await update($, view, v => ({ ...v, message }))
 }
 
-const brokeHint = (error: string) =>
-  /not enough tokens/.test(error) ? `${error}. Lower the bet, or use 💰 I'm Rich or 🆓 refill.` : error
+// ---- points (local, for fun) -----------------------------------------------------------------------
 
-const entryId = () => crypto.randomUUID().replace(/-/g, '')
-
-// ---- sign-in: GitHub device flow, proxied by the host --------------------------------------------
-
-let signInRun = 0
-
-async function signIn($: EngineInterface): Promise<void> {
-  const run = ++signInRun
-  const start = await api($, 'POST', '/v1/device/start')
-  if (start.status !== 200) return say($, start.body.error ?? 'sign-in failed to start')
-  const { deviceCode, userCode, verificationUri, interval, expiresIn } = start.body
-  await update($, view, v => ({ ...v, device: { userCode, uri: verificationUri }, message: '' }))
-  // The URI comes from the host: launch it only when it is GitHub's own https page.
-  if (isGithubPage(verificationUri)) void $.process.run(['open', verificationUri]).catch(() => undefined)
-  const deadline = (await $.clock.now()) + expiresIn * 1000
-  schedulePoll($, run, deviceCode, interval, deadline)
+const isStats = (x: unknown): x is CasinoView['stats'] => {
+  const s = x as CasinoView['stats']
+  return typeof s === 'object' && s !== null && [s.plays, s.points, s.best].every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0)
 }
 
-function schedulePoll($: EngineInterface, run: number, deviceCode: string, interval: number, deadline: number): void {
-  $.clock.after(interval * 1000, () => void pollOnce($, run, deviceCode, interval, deadline))
+async function score($: EngineInterface, win: number): Promise<void> {
+  let stats = NEW_STATS()
+  await update($, view, v => {
+    stats = { plays: v.stats.plays + 1, points: v.stats.points + win, best: Math.max(v.stats.best, win) }
+    return { ...v, stats }
+  })
+  await $.store.set('stats', stats)
 }
 
-async function pollOnce($: EngineInterface, run: number, deviceCode: string, interval: number, deadline: number): Promise<void> {
-  if (run !== signInRun) return // cancelled or superseded
-  if ((await $.clock.now()) > deadline) {
-    await update($, view, v => ({ ...v, device: null, message: 'Code expired. Sign in again.' }))
-    return
-  }
-  const r = await api($, 'POST', '/v1/device/poll', { deviceCode })
-  const status = r.body.status
-  if (status === 'pending') return schedulePoll($, run, deviceCode, interval, deadline)
-  if (status === 'slow_down') return schedulePoll($, run, deviceCode, r.body.interval ?? interval + 5, deadline)
-  if (status === 'ok' && typeof r.body.token === 'string') {
-    await $.store.set('session', r.body.token)
-    await update($, view, v => ({ ...v, device: null, message: `Welcome, ${r.body.login}!` }))
-    await setAccount($, r.body, takeTicket())
-    return
-  }
-  await update($, view, v => ({ ...v, device: null, message: `Sign-in stopped: ${status ?? r.body.error ?? 'unknown'}` }))
+// ---- bonus: a milestone makes the next play a winner -----------------------------------------------
+
+const BONUS_RANK: Record<Bonus, number> = { tests: 1, commit: 2, pr: 3 }
+const BONUS_TOAST: Record<Bonus, string> = {
+  tests: '✅ Tests pass again! Your next spin or deal is a 🏆 bonus.',
+  commit: '📦 Committed! Your next spin or deal is a 🏆 bonus.',
+  pr: '🚀 Pull request opened! Your next spin or deal is a 🏆 bonus.',
 }
 
-async function signOut($: EngineInterface): Promise<void> {
-  signInRun += 1
-  await api($, 'POST', '/v1/logout')
-  await $.store.delete('session')
-  await update($, view, v => ({ ...v, account: null, device: null, message: 'Signed out.', slots: NEW_SLOTS(), poker: NEW_POKER() }))
+const isBonus = (x: unknown): x is Bonus => typeof x === 'string' && x in BONUS_RANK
+
+// One bonus waits at a time; a bigger milestone upgrades it. Kept in the store, so a reload keeps it.
+async function earnBonus($: EngineInterface, kind: Bonus): Promise<void> {
+  const held = (await $.store.get('bonus')) as unknown
+  if (isBonus(held) && BONUS_RANK[held] >= BONUS_RANK[kind]) return
+  await $.store.set('bonus', kind)
+  await update($, view, v => ({ ...v, bonus: kind }))
+  $.ui.toast(BONUS_TOAST[kind])
+}
+
+// Takes the waiting bonus, if any, for the play about to happen.
+async function takeBonus($: EngineInterface): Promise<boolean> {
+  if (!isBonus(await $.store.get('bonus'))) return false
+  await $.store.delete('bonus')
+  await update($, view, v => ({ ...v, bonus: null }))
+  return true
 }
 
 // ---- games -----------------------------------------------------------------------------------------
 
-// Set synchronously, before any await, so a double press can't start two requests.
+// Set synchronously, before any await, so a double press (or Claude and the player at once) plays once.
 let inFlight = false
 
-async function spin($: EngineInterface): Promise<void> {
+async function spin($: EngineInterface, byClaude = false): Promise<void> {
   if (inFlight) return
   inFlight = true
-  const at = takeTicket()
-  const v = await read($, view)
-  if (v.account && v.account.balance < v.slots.bet) {
-    inFlight = false
-    return // the pane shows SPIN as unpressable text and says why
-  }
-  await update($, view, v => ({ ...v, isBusy: true, showNudge: false, slots: { ...v.slots, isSpinning: true, cells: [], win: 0, message: '' } }))
-  const startedAt = await $.clock.now()
-  const r = await api($, 'POST', '/v1/slots/spin', { bet: v.slots.bet, entryId: entryId() })
-  // Let the reels run at least ~0.9 s so the result lands like a spin, not a flicker.
-  const wait = Math.max(0, 900 - ((await $.clock.now()) - startedAt))
-  $.clock.after(wait, () => void landSpin($, r, at))
+  const isBonusPlay = await takeBonus($)
+  const result = isBonusPlay ? bonusSpin() : spinFrom(newSeed())
+  await update($, view, v => ({ ...v, slots: { ...v.slots, isSpinning: true, cells: [], win: 0, isBonus: isBonusPlay, message: '' } }))
+  // Let the reels run ~0.9 s so the result lands like a spin, not a flicker.
+  $.clock.after(900, () => void landSpin($, result, isBonusPlay, byClaude))
 }
 
 // The reels Client animates on its own clock; this only hands it the result.
-async function landSpin($: EngineInterface, r: ApiResult, at: number): Promise<void> {
+async function landSpin($: EngineInterface, r: Spin, isBonusPlay: boolean, byClaude: boolean): Promise<void> {
   inFlight = false
-  if (r.status !== 200) {
-    await update($, view, v => ({
-      ...v,
-      isBusy: false,
-      slots: { ...v.slots, isSpinning: false, message: brokeHint(r.body.error ?? 'spin failed') },
-    }))
-    return
-  }
-  const cells = (r.body.wins as { cells: { reel: number; row: number }[] }[]).flatMap(w => w.cells)
+  const who = isBonusPlay ? '🏆 Bonus! ' : byClaude ? 'Claude spun: ' : ''
   await update($, view, v => ({
     ...v,
-    isBusy: false,
-    slots: { ...v.slots, grid: r.body.grid, win: r.body.win, cells, isSpinning: false, message: r.body.win > 0 ? `WIN +${r.body.win}` : '' },
+    slots: { ...v.slots, grid: r.grid, win: r.win, cells: r.cells, isSpinning: false, message: r.win > 0 ? `${who}WIN ${r.win}` : `${who}No win.` },
   }))
-  await setAccount($, r.body, at)
-  if (r.body.win >= r.body.bet * BIG_WIN) $.ui.toast(`🎰 Big win! +${r.body.win} tokens`)
+  await score($, r.win)
+  if (r.win >= BIG_WIN) $.ui.toast(`🎰 Big win! ${r.win} points`)
 }
 
-async function deal($: EngineInterface): Promise<void> {
+// Claude's deals draw themselves after a moment, unless the player has taken the hand over.
+let autoDraw: { cancel: () => void } | null = null
+
+async function deal($: EngineInterface, byClaude = false): Promise<void> {
   if (inFlight) return
   inFlight = true
   try {
-    const at = takeTicket()
-    const v = await read($, view)
-    if (v.poker.phase === 'dealt') return
-    if (v.account && v.account.balance < v.poker.bet) return // the pane shows DEAL as unpressable text
-    await update($, view, v => ({ ...v, isBusy: true, showNudge: false, poker: { ...v.poker, message: '' } }))
-    const r = await api($, 'POST', '/v1/poker/deal', { bet: v.poker.bet, entryId: entryId() })
-    if (r.status !== 200) {
-      await update($, view, v => ({ ...v, poker: { ...v.poker, message: brokeHint(r.body.error ?? 'deal failed') } }))
-      // A hand already open there (dealt elsewhere, or this deal landed but its answer was lost): show it.
-      if (r.status === 409 || r.status === 0) await resync($)
-      return
-    }
+    if ((await read($, view)).poker.phase === 'dealt') return
+    const isBonusPlay = await takeBonus($)
+    const d: Deal = isBonusPlay ? bonusDeal() : dealFrom(newSeed())
+    const lead = isBonusPlay ? '🏆 Bonus deal! ' : byClaude ? 'Claude dealt. ' : ''
+    const after = byClaude ? ` Drawing in ${AUTO_DRAW_MS / 1000} s unless you change a hold.` : ' Pick cards to hold, then DRAW.'
     await update($, view, v => ({
       ...v,
       // A hand that already pays starts held, as on a video poker machine; the player can release any card.
       poker: {
-        ...v.poker,
-        cards: r.body.dealt,
-        held: heldFrom(r.body.contributing),
-        winning: r.body.contributing ?? [],
+        ...NEW_POKER(),
+        cards: d.dealt,
+        held: [0, 1, 2, 3, 4].map(i => d.contributing.includes(i)),
+        winning: d.contributing,
         phase: 'dealt' as const,
-        result: '',
-        win: 0,
-        message: r.body.made ? `You hold: ${r.body.made}` : 'Pick cards to hold, then DRAW.',
+        handId: d.seed,
+        isBonus: isBonusPlay,
+        message: [lead, d.made ? `You hold: ${d.made}.` : '', after].map(t => t.trim()).filter(Boolean).join(' '),
       },
     }))
-    await setAccount($, r.body, at)
+    autoDraw?.cancel()
+    autoDraw = byClaude ? $.clock.after(AUTO_DRAW_MS, () => void drawIfUntouched($, d.seed)) : null
   } finally {
     inFlight = false
-    await update($, view, v => ({ ...v, isBusy: false }))
   }
+}
+
+async function drawIfUntouched($: EngineInterface, handId: string): Promise<void> {
+  const p = (await read($, view)).poker
+  if (p.phase === 'dealt' && p.handId === handId && !p.touched) await drawCards($)
 }
 
 async function drawCards($: EngineInterface): Promise<void> {
   if (inFlight) return
   inFlight = true
   try {
-    const at = takeTicket()
-    const v = await read($, view)
-    if (v.poker.phase !== 'dealt') return
-    await update($, view, v => ({ ...v, isBusy: true }))
-    const holds = v.poker.held.flatMap((h, i) => (h ? [i] : []))
-    const r = await api($, 'POST', '/v1/poker/draw', { holds })
-    if (r.status !== 200) {
-      await update($, view, v => ({ ...v, poker: { ...v.poker, message: r.body.error ?? 'draw failed' } }))
-      // The hand was finished elsewhere, or this draw landed but its answer was lost: follow the server.
-      if (r.status === 409 || r.status === 0) await resync($)
-      return
-    }
+    const p = (await read($, view)).poker
+    if (p.phase !== 'dealt') return
+    autoDraw?.cancel()
+    autoDraw = null
+    const r = drawFrom(p.handId, p.held.flatMap((h, i) => (h ? [i] : [])))
+    const lead = p.isBonus ? '🏆 ' : ''
     await update($, view, v => ({
       ...v,
       poker: {
         ...v.poker,
-        cards: r.body.final,
-        winning: r.body.contributing ?? [],
+        cards: r.final,
+        winning: r.contributing,
         phase: 'drawn' as const,
-        result: r.body.result,
-        win: r.body.win,
-        message: r.body.win > 0 ? `${r.body.result}! +${r.body.win}` : `${r.body.result}. No win.`,
+        result: r.result,
+        win: r.win,
+        message: r.win > 0 ? `${lead}${r.result}! WIN ${r.win}` : `${lead}${r.result}. No win.`,
       },
     }))
-    await setAccount($, r.body, at)
+    await score($, r.win)
+    if (r.win >= BIG_WIN) $.ui.toast(`🃏 ${r.result}! ${r.win} points`)
   } finally {
     inFlight = false
-    await update($, view, v => ({ ...v, isBusy: false }))
   }
 }
 
 async function toggleHold($: EngineInterface, i: number): Promise<void> {
   await update($, view, v =>
-    v.poker.phase === 'dealt' ? { ...v, poker: { ...v.poker, held: v.poker.held.map((h, j) => (j === i ? !h : h)) } } : v,
+    v.poker.phase === 'dealt' ? { ...v, poker: { ...v.poker, touched: true, held: v.poker.held.map((h, j) => (j === i ? !h : h)) } } : v,
   )
 }
 
-async function cycleBet($: EngineInterface, game: 'slots' | 'poker'): Promise<void> {
-  const next = (list: number[], bet: number) => list[(list.indexOf(bet) + 1) % list.length] ?? list[0]!
-  await update($, view, v =>
-    game === 'slots'
-      ? { ...v, slots: { ...v.slots, bet: next(SLOT_BETS, v.slots.bet) } }
-      : v.poker.phase === 'dealt'
-        ? v
-        : { ...v, poker: { ...v.poker, bet: next(POKER_BETS, v.poker.bet) } },
-  )
+// A Claude turn plays on whichever game is showing. Nothing plays on the Pomodoro tab, with the pane
+// hidden, mid-hand, or while a play is running.
+async function autoPlay($: EngineInterface): Promise<void> {
+  const v = await read($, view)
+  if (!v.isPaneOpen || inFlight) return
+  if (v.tab === 'slots') await spin($, true)
+  else if (v.tab === 'poker' && v.poker.phase !== 'dealt') await deal($, true)
 }
 
-async function openLootbox($: EngineInterface): Promise<void> {
-  const at = takeTicket()
-  const r = await api($, 'POST', '/v1/lootbox')
-  if (r.status === 200) {
-    await say($, `🎁 Free tokens, ${String(r.body.prize.label)}: +${r.body.prize.tokens}`)
-    await update($, view, v => ({ ...v, showNudge: r.body.membership?.isMember !== true }))
-    if (r.body.prize.tokens >= 2000) $.ui.toast(`🎁 ${r.body.prize.label} free tokens! +${r.body.prize.tokens}`)
-    await setAccount($, r.body, at)
-  } else if (r.status === 429 && typeof r.body.nextLootboxMs === 'number') {
-    const minutes = Math.ceil((r.body.nextLootboxMs - (await $.clock.now())) / 60000)
-    await say($, `More free tokens in ${minutes} min.`)
-  } else {
-    await say($, r.body.error ?? 'free tokens failed')
-  }
-}
-
-async function refill($: EngineInterface): Promise<void> {
-  const at = takeTicket()
-  const r = await api($, 'POST', '/v1/refill')
-  if (r.status === 200) {
-    await say($, `🆓 Refilled: +${r.body.refilled} tokens.`)
-    await setAccount($, r.body, at)
-  } else {
-    await say($, r.body.error ?? 'refill failed')
-  }
-}
-
-// I'm Rich :) is the donate button: it opens the creator's GitHub Sponsors page. Sponsoring buys no tokens.
+// Sponsoring is a thank-you to the creator: it unlocks nothing and buys nothing.
 const SPONSORS_URL = 'https://github.com/sponsors/altoption'
 
-async function imRich($: EngineInterface): Promise<void> {
+async function sponsor($: EngineInterface): Promise<void> {
   await say($, `Opening ${SPONSORS_URL}. Thank you!`)
   if (isGithubPage(SPONSORS_URL)) void $.process.run(['open', SPONSORS_URL]).catch(() => undefined)
 }
 
 const PANE_TITLE = '🎰 Terminal Slots'
-
-// "3h 12m", "12m": time left, rounded up to the minute.
-const untilText = (ms: number) => {
-  const minutes = Math.ceil(ms / 60_000)
-  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`
-}
-
-// Keeps view.now fresh so countdowns tick; one ticker however often the session starts.
-let clockTicker: { cancel: () => void } | null = null
-async function startClock($: EngineInterface): Promise<void> {
-  clockTicker?.cancel()
-  const tick = async () => {
-    const now = await $.clock.now()
-    await update($, view, v => ({ ...v, now }))
-  }
-  await tick()
-  clockTicker = $.clock.every(30_000, () => void tick())
-}
 
 async function showPane($: EngineInterface): Promise<{ isPlaced: boolean; reason?: string }> {
   const opened = await $.ui.open({ id: PANE, title: PANE_TITLE })
@@ -392,10 +233,10 @@ async function togglePane($: EngineInterface): Promise<void> {
 }
 
 async function setTab($: EngineInterface, tab: CasinoView['tab']): Promise<void> {
-  await update($, view, v => ({ ...v, tab, message: '', showNudge: false }))
+  await update($, view, v => ({ ...v, tab, message: '' }))
 }
 
-// ---- Pomodoro (local, no tokens) ------------------------------------------------------------------
+// ---- Pomodoro (local) ------------------------------------------------------------------------------
 
 // Each change bumps the run, so a timer from an earlier start, pause or reload does nothing when it fires.
 let pomoRun = 0
@@ -431,12 +272,10 @@ async function finishPomo($: EngineInterface, run: number, wasAway = false): Pro
   if (run !== pomoRun) return
   const before = (await read($, view)).pomo
   const p = await setPomo($, (p, now) => nextPomo(p, now, true))
-  const v = await read($, view)
-  const tokens = v.account && v.account.nextLootboxMs <= v.now ? ' 🎁 Free tokens are ready.' : ''
   const away = wasAway ? ' (while you were away)' : ''
   $.ui.toast(
     before.phase === 'focus'
-      ? `🍅 Pomodoro done${away}! Take a ${POMO_MS[p.phase] / 60_000}-minute break.${tokens}`
+      ? `🍅 Pomodoro done${away}! Take a ${POMO_MS[p.phase] / 60_000}-minute break.`
       : `${PHASE_LABEL[before.phase]} is over${away}. Ready to focus?`,
   )
 }
@@ -449,7 +288,7 @@ async function restorePomo($: EngineInterface): Promise<void> {
   if (p.endsAt !== null && p.endsAt <= (await $.clock.now())) await finishPomo($, pomoRun, true)
 }
 
-// ---- calibration (local, no tokens) ----------------------------------------------------------------
+// ---- calibration (local) ---------------------------------------------------------------------------
 
 async function calibrate($: EngineInterface, fn: (c: Calibration) => void): Promise<Calibration> {
   const c = ((await $.store.get('calib')) as Calibration | undefined) ?? newCalibration()
@@ -461,6 +300,11 @@ async function calibrate($: EngineInterface, fn: (c: Calibration) => void): Prom
 }
 
 // ---- hooks -----------------------------------------------------------------------------------------
+
+// Tools the main loop has used since its last turn ended (subagents and the engine's forks don't count).
+let turnTools = 0
+// The last test run's outcome: tests passing again after a failure is a milestone.
+let lastTest: 'pass' | 'fail' | null = null
 
 export const register: Register = on => {
 
@@ -476,30 +320,29 @@ export const register: Register = on => {
       },
       isDeferred: false,
     })
-    await $.command.register({ name: 'slots', description: 'Show or hide Terminal Slots; "/slots logout" to sign out' })
+    await $.command.register({ name: 'slots', description: 'Show or hide Terminal Slots' })
     await calibrate($, () => undefined)
-    // Like the clock, the timer must never stop the session from starting.
-    await restorePomo($).catch(() => undefined)
-    // A reload re-runs this but drops timers: nothing can still be spinning or in flight.
+    // A reload re-runs this but drops timers: nothing can still be spinning, in flight or about to draw.
     inFlight = false
-    // The countdown clock is cosmetic: it must never stop the session from starting.
-    await startClock($).catch(() => undefined)
-    await update($, view, v => ({ ...v, isBusy: false, slots: { ...v.slots, isSpinning: false } }))
-    if (await $.store.get('session')) {
-      const at = takeTicket()
-      const me = await api($, 'GET', '/v1/me')
-      if (me.status === 200) await setAccount($, me.body, at)
-      else if (me.status !== 401) await say($, `Can't reach the game host right now (${me.body.error ?? me.status}). Your session is kept.`)
-    }
+    autoDraw = null
+    turnTools = 0
+    // Earlier versions kept a game-server session here; nothing uses it now.
+    await $.store.delete('session')
+    const stats = await $.store.get('stats')
+    const bonus = await $.store.get('bonus')
+    await update($, view, v => ({
+      ...v,
+      stats: isStats(stats) ? stats : NEW_STATS(),
+      bonus: isBonus(bonus) ? bonus : null,
+      slots: { ...v.slots, isSpinning: false },
+    }))
+    // The timer must never stop the session from starting.
+    await restorePomo($).catch(() => undefined)
     void showPane($)
     return next(e)
   })
 
   on('command.run', { command: 'slots' }, async ($, e) => {
-    if ((e.args ?? '').trim() === 'logout') {
-      await signOut($)
-      return { text: 'Signed out of Terminal Slots.' }
-    }
     await togglePane($)
     const v = await read($, view)
     return { text: v.isPaneOpen ? 'Terminal Slots is showing.' : 'Terminal Slots is hidden. /slots or Show brings it back.' }
@@ -511,7 +354,18 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Always visible above the prompt: the balance and a Show/Hide toggle for the pane.
+  // A main-loop turn that did real work plays once. Only observes: the turn's result passes on unchanged.
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined) {
+      const tools = turnTools
+      turnTools = 0
+      if (e.reason === 'answer' && tools >= TOOLS_PER_PLAY) void autoPlay($).catch(() => undefined)
+    }
+    return r
+  }).catch(($, e, next) => next(e))
+
+  // Always visible above the prompt: a bonus waiting, the Pomodoro time, and Show/Hide for the pane.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -519,7 +373,7 @@ export const register: Register = on => {
     return (
       <Box>
         <Text>🎰 Terminal Slots</Text>
-        <Text dimColor>{v.account ? ` · ${v.account.balance.toLocaleString()} tokens` : ''}</Text>
+        {v.bonus ? <Text color="warning"> · 🏆 bonus ready</Text> : null}
         {isRunning(v.pomo) ? <Text dimColor>{` · ${PHASE_LABEL[v.pomo.phase].split(' ')[0]} ${clockText(pomoLeft(v.pomo, v.now))}`}</Text> : null}
         <Text> </Text>
         <Button key="slots-toggle" label={v.isPaneOpen ? 'Hide' : 'Show'} onPress={() => void togglePane($)} />
@@ -544,58 +398,18 @@ export const register: Register = on => {
           <Button key="tab-poker" variant={v.tab === 'poker' ? 'primary' : undefined} label="Poker" onPress={() => void setTab($, 'poker')} />
           <Text> </Text>
           <Button key="tab-pomodoro" variant={v.tab === 'pomodoro' ? 'primary' : undefined} label="Pomodoro" onPress={() => void setTab($, 'pomodoro')} />
+          <Text> </Text>
+          <Button key="sponsor" label="💖 Sponsor" onPress={() => void sponsor($)} />
         </Box>
-        {v.account ? (
-          <Box>
-            <Text bold>{v.account.balance.toLocaleString()} tokens</Text>
-            <Text dimColor> · </Text>
-            {v.account.isMember ? (
-              // One Text holding the coloured letters, so the name flows inline instead of stacking.
-              <Text bold>
-                {[...v.account.login].map((ch, n) => (
-                  <Text key={`name-${n}`} color={RAINBOW[n % RAINBOW.length]}>
-                    {ch}
-                  </Text>
-                ))}
-                <Text color="warning"> ★</Text>
-              </Text>
-            ) : (
-              <Text dimColor>{v.account.login}</Text>
-            )}
-            <Text> </Text>
-            {v.account.nextLootboxMs > v.now ? (
-              <Text dimColor>[ 🎁 Free tokens in {untilText(v.account.nextLootboxMs - v.now)} ]</Text>
-            ) : (
-              <Button key="loot" label="🎁 Free tokens" onPress={() => void openLootbox($)} />
-            )}
-            {/* Optional items are direct children of the row: a fragment would start a new line. */}
-            <Text> </Text>
-            <Button key="rich" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
-          </Box>
+        {v.tab !== 'pomodoro' ? (
+          <Text dimColor>
+            {v.stats.plays.toLocaleString()} plays · {v.stats.points.toLocaleString()} points · best {v.stats.best.toLocaleString()}
+            {v.bonus ? <Text color="warning"> · 🏆 next play is a bonus</Text> : null}
+          </Text>
         ) : null}
       </Box>
     )
 
-    // Broke: the free refill, with the support link beside it. Support never buys tokens.
-    const brokeRow =
-      v.account && v.account.canRefill ? (
-        <Box>
-          <Text bold>Out of tokens? </Text>
-          <Button key="refill" variant="primary" label="🆓 Free refill (+500)" onPress={() => void refill($)} />
-          <Text> </Text>
-          <Button key="rich-broke" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
-        </Box>
-      ) : null
-
-    const nudgeRow =
-      v.account && v.showNudge && !v.account.isMember ? (
-        <Box>
-          <Text dimColor>Feeling rich? </Text>
-          <Button key="rich-nudge" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
-        </Box>
-      ) : null
-
-    // The timer needs no account: it runs on this machine and never touches tokens.
     if (v.tab === 'pomodoro') {
       const p = v.pomo
       const left = pomoLeft(p, v.now)
@@ -630,25 +444,6 @@ export const register: Register = on => {
           </Text>
           <Text dimColor>25 min focus · 5 min break · 15 min after every 4th</Text>
           <Text dimColor>Runs while you work, even with the pane hidden.</Text>
-        </Box>
-      )
-    }
-
-    if (!v.account) {
-      return (
-        <Box flexDirection="column">
-          {header}
-          <Text> </Text>
-          <Text>Free tokens, slots and video poker. Sign in with GitHub to play.</Text>
-          {v.device ? (
-            <Box flexDirection="column">
-              <Text>Enter this code at {v.device.uri}:</Text>
-              <Text bold>{v.device.userCode}</Text>
-              <Text dimColor>Waiting for GitHub…</Text>
-            </Box>
-          ) : (
-            <Button key="signin" variant="primary" label="Sign in with GitHub" onPress={() => void signIn($)} />
-          )}
           {v.message ? <Text dimColor>{v.message}</Text> : null}
         </Box>
       )
@@ -664,16 +459,12 @@ export const register: Register = on => {
         </Text>
       ) : null
 
-    // A bet the balance can't cover: the action becomes plain text and the pane says why.
-    const unaffordable = (bet: number) =>
-      v.account && v.account.balance < bet ? `Bet ${bet} is more than your ${v.account.balance.toLocaleString()} tokens. Lower the bet.` : null
+    const hint = <Text dimColor>Claude's busy turns play here too; commits, PRs and fixed tests earn a 🏆 bonus.</Text>
 
     if (v.tab === 'slots') {
       return (
         <Box flexDirection="column">
           {header}
-          {brokeRow}
-          {nudgeRow}
           <Text> </Text>
           {Client ? (
             <Client
@@ -684,18 +475,14 @@ export const register: Register = on => {
           ) : (
             lines(renderReels(v.slots.grid, columns, v.slots.isSpinning ? [] : v.slots.cells))
           )}
-          <Text bold>{v.slots.isSpinning ? 'spinning…' : v.slots.message || v.message || ' '}</Text>
+          <Text bold color={v.slots.isBonus && !v.slots.isSpinning ? 'warning' : undefined}>
+            {v.slots.isSpinning ? (v.slots.isBonus ? '🏆 bonus spin…' : 'spinning…') : v.slots.message || v.message || ' '}
+          </Text>
           <Box>
-            {unaffordable(v.slots.bet) ? (
-              <Text dimColor>[ SPIN ]</Text>
-            ) : (
-              <Button key="spin" variant="primary" label="SPIN" onPress={() => void spin($)} />
-            )}
-            <Text> </Text>
-            <Button key="slot-bet" label={`Bet ${v.slots.bet}`} onPress={() => void cycleBet($, 'slots')} />
+            <Button key="spin" variant="primary" label="SPIN" onPress={() => void spin($)} />
           </Box>
-          {unaffordable(v.slots.bet) ? <Text color="warning">{unaffordable(v.slots.bet)}</Text> : null}
           <Text dimColor>Barn of Fortune · 10 lines</Text>
+          {hint}
           {calib}
         </Box>
       )
@@ -705,8 +492,6 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {header}
-        {brokeRow}
-        {nudgeRow}
         <Text> </Text>
         {columns < 30 ? (
           <Box flexDirection="column">
@@ -743,7 +528,7 @@ export const register: Register = on => {
                   <Box
                     flexDirection="column"
                     borderStyle={isHeld ? 'double' : isWinning ? 'bold' : 'single'}
-                    borderColor={isWinning ? 'success' : isHeld ? 'suggestion' : v.account?.isMember ? 'warning' : undefined}
+                    borderColor={isWinning ? 'success' : isHeld ? 'suggestion' : v.poker.isBonus ? 'warning' : undefined}
                   >
                     {isDealt ? (
                       // The face itself is a borderless button: a click anywhere on it holds or releases the card.
@@ -775,22 +560,18 @@ export const register: Register = on => {
             })}
           </Box>
         )}
-        <Text bold>{v.poker.message || v.message || ' '}</Text>
+        <Text bold color={v.poker.isBonus ? 'warning' : undefined}>
+          {v.poker.message || v.message || ' '}
+        </Text>
         <Box>
           {isDealt ? (
             <Button key="draw" variant="primary" label="DRAW" onPress={() => void drawCards($)} />
           ) : (
-            unaffordable(v.poker.bet) ? (
-              <Text dimColor>[ DEAL ]</Text>
-            ) : (
-              <Button key="deal" variant="primary" label="DEAL" onPress={() => void deal($)} />
-            )
+            <Button key="deal" variant="primary" label="DEAL" onPress={() => void deal($)} />
           )}
-          <Text> </Text>
-          <Button key="poker-bet" label={`Bet ${v.poker.bet}`} onPress={() => void cycleBet($, 'poker')} />
         </Box>
-        {!isDealt && unaffordable(v.poker.bet) ? <Text color="warning">{unaffordable(v.poker.bet)}</Text> : null}
         <Text dimColor>Click a card or press 1-5 to hold</Text>
+        {hint}
         {calib}
       </Box>
     )
@@ -798,7 +579,7 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     // Compared as a string: the tool union includes MCP tools without a `tool` key in their type.
-    const call = e as unknown as { tool: string; command?: string; pPass?: number }
+    const call = e as unknown as { tool: string; command?: string; pPass?: number; agentId?: string }
     if (call.tool === WAGER) {
       const pPass = Math.max(0, Math.min(1, Number(call.pPass)))
       await calibrate($, c => {
@@ -806,21 +587,27 @@ export const register: Register = on => {
       })
       return { result: `Recorded P(pass)=${pPass}. Now run the tests.` }
     }
+    if (call.agentId === undefined) turnTools += 1
 
     const ran = await next(e)
 
     // Bookkeeping after the tool ran must never fail the call: its errors stop here.
     try {
-      const outcome = call.tool === 'Bash' && ran.deny === undefined ? testOutcome(call.command ?? '', ran.isError === true) : null
+      const isBash = call.tool === 'Bash' && ran.deny === undefined
+      const outcome = isBash ? testOutcome(call.command ?? '', ran.isError === true) : null
       if (outcome) {
         const c = await calibrate($, c => {
           if (c.pending !== null) c.bets.push({ pPass: c.pending, passed: outcome === 'pass' })
           c.pending = null
         })
-        if (outcome === 'pass') $.ui.toast(`✅ Tests passed · Claude's Brier ${brier(c.bets)?.toFixed(3) ?? 'n/a'}`)
+        if (outcome === 'pass' && lastTest === 'fail') await earnBonus($, 'tests')
+        else if (outcome === 'pass') $.ui.toast(`✅ Tests passed · Claude's Brier ${brier(c.bets)?.toFixed(3) ?? 'n/a'}`)
+        lastTest = outcome
       }
+      const milestone = isBash && ran.isError !== true ? milestoneOf(call.command ?? '') : null
+      if (milestone) await earnBonus($, milestone)
     } catch {
-      // calibration is cosmetic
+      // the games are cosmetic
     }
     return ran
     // Fail open: a hook that threw before next() lets the tool run; after next(), the engine

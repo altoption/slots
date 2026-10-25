@@ -1,18 +1,32 @@
 export type Cell = { reel: number; row: number }
 
+// What a milestone earned: the next play is a bonus. A PR outranks a commit, a commit passing tests.
+export type Bonus = 'tests' | 'commit' | 'pr'
+
 export type CasinoView = {
   tab: 'slots' | 'poker' | 'pomodoro'
-  account: { login: string; balance: number; nextLootboxMs: number; isMember: boolean; canRefill: boolean } | null
-  device: { userCode: string; uri: string } | null
   message: string
-  isBusy: boolean
   isPaneOpen: boolean
-  // After I'm Rich: a non-supporter sees a support link until their next action.
-  showNudge: boolean
-  // The clock as of the last tick (every 30 s), for countdowns.
+  // The clock as of the last change, for the Pomodoro countdown.
   now: number
-  slots: { grid: string[][]; bet: number; win: number; cells: Cell[]; isSpinning: boolean; message: string }
-  poker: { cards: (string | null)[]; held: boolean[]; winning: number[]; phase: 'idle' | 'dealt' | 'drawn'; bet: number; result: string; win: number; message: string }
+  bonus: Bonus | null
+  // Points are for fun: nothing is bet, bought or paid out.
+  stats: { plays: number; points: number; best: number }
+  slots: { grid: string[][]; win: number; cells: Cell[]; isSpinning: boolean; isBonus: boolean; message: string }
+  poker: {
+    cards: (string | null)[]
+    held: boolean[]
+    winning: number[]
+    phase: 'idle' | 'dealt' | 'drawn'
+    // The deal's seed: a timer set for one hand never acts on another.
+    handId: string
+    // The player changed a hold since the deal: Claude's auto-draw leaves the hand to them.
+    touched: boolean
+    isBonus: boolean
+    result: string
+    win: number
+    message: string
+  }
   // The Pomodoro timer: runs on this machine only, kept in the plugin store across restarts.
   pomo: Pomo
   calib: { settled: number; brier: number | null; pending: number | null }

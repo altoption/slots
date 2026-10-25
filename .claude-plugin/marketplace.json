@@ -1,12 +1,14 @@
 {
   "name": "terminal-slots",
   "description": "Terminal Slots: slots, video poker and a Pomodoro timer in a Claude Code side pane",
-  "owner": { "name": "altoption" },
+  "owner": {
+    "name": "altoption"
+  },
   "plugins": [
     {
       "name": "terminal-slots",
       "source": "./plugin",
-      "description": "Slots, video poker and a Pomodoro timer in a side pane, free tokens, GitHub sign-in"
+      "description": "Slots, video poker and a Pomodoro timer in a side pane; Claude's busy turns play too. Runs locally."
     }
   ]
 }

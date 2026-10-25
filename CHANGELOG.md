@@ -2,6 +2,18 @@
 
 Update with `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [1.0.0] - 2026-10-25
+
+### Changed
+- Everything runs on your machine: no sign-in, no tokens, no leaderboard. Spin and deal as often as
+  you like; wins are points, for fun.
+- When Claude finishes a busy turn, the open tab plays once: a spin, or a deal that draws by itself.
+- A commit, a pull request, or tests passing again earn a 🏆 bonus: your next spin or deal wins.
+- **💖 Sponsor** replaces I'm Rich :).
+
+### Removed
+- Sign-in with GitHub, tokens, Free tokens, the daily refill, the leaderboard and supporter names.
+
 ## [0.11.0] - 2026-10-25
 
 ### Added

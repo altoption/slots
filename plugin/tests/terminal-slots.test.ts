@@ -1,8 +1,10 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { renderCards, renderReels } from '../hooks/ascii'
-import { brier, isGithubPage, isSafeHost, testOutcome } from '../hooks/game'
+import { cardText, renderCards, renderReels } from '../hooks/ascii'
+import { brier, isGithubPage, testOutcome } from '../hooks/game'
+import { BET, BONUS_DEAL_ORDINAL, BONUS_SPIN_WIN, bonusDeal, bonusSpin, dealFrom, drawFrom, milestoneOf, spinFrom } from '../hooks/local'
+import { royalDraw, scoreDealt } from '../hooks/engine/slots-engine.js'
 import { isPomo, newPomo, nextPomo, progressBar } from '../hooks/pomodoro'
 
 const GRID = [
@@ -23,18 +25,57 @@ test('renderers degrade with the pane width', async () => {
   expect(renderCards(['As', 'Th', '3c', 'Kd', 'Qs'], 20, [true])[0]).toBe('[A♠] 10♥  3♣  K♦  Q♠ ')
 })
 
-test('helpers: safe hosts, test outcomes, Brier', async () => {
-  expect(isSafeHost('https://slots.example.workers.dev')).toBe(true)
-  expect(isSafeHost('http://localhost:8787')).toBe(true)
-  expect(isSafeHost('http://evil.example.com')).toBe(false)
+test('helpers: test outcomes, Brier, GitHub-only links', async () => {
   expect(testOutcome('pnpm test', true)).toBe('fail')
   expect(testOutcome('ls', false)).toBe(null)
   expect(brier([{ pPass: 0.8, passed: true }])?.toFixed(2)).toBe('0.04')
-  expect(isGithubPage('https://github.com/login/device')).toBe(true)
-  for (const bad of ['-a Calculator', 'file:///etc/passwd', 'http://github.com/login/device', 'https://github.com.evil.io/x', 'https://user@github.com/', 'javascript:alert(1)', 42]) {
+  expect(isGithubPage('https://github.com/sponsors/altoption')).toBe(true)
+  for (const bad of ['-a Calculator', 'file:///etc/passwd', 'http://github.com/x', 'https://github.com.evil.io/x', 'https://user@github.com/', 42]) {
     expect(isGithubPage(bad)).toBe(false)
   }
 })
+
+// ---- the games, on this machine ---------------------------------------------------------------------
+
+// The first seed of s0, s1, … whose deal passes `ok`.
+const seedWhere = (ok: (d: ReturnType<typeof dealFrom>) => boolean) => {
+  for (let i = 0; i < 5000; i++) if (ok(dealFrom(`s${i}`))) return `s${i}`
+  throw new Error('no such seed')
+}
+
+test('games are a function of their seed', async () => {
+  expect(spinFrom('abc')).toEqual(spinFrom('abc'))
+  const seed = seedWhere(d => d.made !== null)
+  const d = dealFrom(seed)
+  expect(d.contributing.length).toBeGreaterThan(0)
+  expect(drawFrom(seed, d.contributing)).toEqual(drawFrom(seed, d.contributing))
+  expect(drawFrom(seed, [0, 1, 2, 3, 4]).final).toEqual(d.dealt) // holding everything keeps the hand
+})
+
+test('a bonus spin pays 10× the bet or more; a bonus deal is Three of a Kind or better', async () => {
+  for (let i = 0; i < 10; i++) {
+    expect(bonusSpin().win).toBeGreaterThanOrEqual(BONUS_SPIN_WIN)
+    expect(bonusDeal().ordinal).toBeGreaterThanOrEqual(BONUS_DEAL_ORDINAL)
+  }
+  // Bounded: with one try it is just a normal play.
+  let n = 0
+  bonusSpin(() => `t${n++}`, 1)
+  expect(n).toBe(1)
+})
+
+test('milestones: commits and PRs that ran, one command at a time, never a dry run', async () => {
+  expect(milestoneOf('git commit -m "x"')).toBe('commit')
+  expect(milestoneOf('git add -A && git commit -q -m "feat: x" && git push')).toBe('commit')
+  expect(milestoneOf('git -C repo commit -m x')).toBe('commit')
+  expect(milestoneOf('gh pr create --title t --body b')).toBe('pr')
+  expect(milestoneOf('git commit -m x && gh pr create -f')).toBe('pr')
+  expect(milestoneOf('git commit --dry-run')).toBe(null)
+  expect(milestoneOf('git log --oneline')).toBe(null)
+  expect(milestoneOf('echo git commit')).toBe(null)
+  expect(milestoneOf('gh pr list')).toBe(null)
+})
+
+// ---- the pane -----------------------------------------------------------------------------------------
 
 const PANE = (surface: 'terminal' | 'desktop', bodyColumns = 60) =>
   ({
@@ -53,82 +94,52 @@ const BAND = (surface: 'terminal' | 'desktop') =>
     props: { hasSurvey: false, isWorking: false, maxRows: 10, scroll: { offset: 0, bodyRows: 10 }, view: {} },
   }) as never
 
-const PAIR = { dealt: ['As', 'Ah', '3c', 'Kd', '7s'], bet: 10, made: 'Pair of Aces', contributing: [0, 1] }
-
 /**
- * A fake host answering the routes the mod calls as host/src/app.ts does. Tests change `server` to
- * play out what happens elsewhere (another device drew the hand, a deal landed but its answer was lost).
+ * Stands in for Claude Code beneath the plugin. Any network call fails the test: the plugin has none.
+ * `tools.isError` sets how the next tool call ends.
  */
-const fakeHost = (on: On) => {
-  const seen: string[] = []
-  const opened: string[] = []
+const engine = (on: On) => {
   const toasts: string[] = []
-  const server = {
-    balance: 1000,
-    openHand: null as null | typeof PAIR,
-    isDown: false,
-    isMember: false,
-    nextLootboxMs: 0,
-    dealStatus: 200,
-    drawStatus: 200,
-  }
-  const account = () => ({
-    login: 'octo',
-    balance: server.balance,
-    nextLootboxMs: server.nextLootboxMs,
-    openHand: server.openHand,
-    membership: { isMember: server.isMember },
-    canRefill: server.balance < 10,
-  })
-  on('http.fetch', (_, e) => {
-    const path = new URL(e.url).pathname
-    seen.push(`${e.init?.method ?? 'GET'} ${path} ${e.init?.headers?.Authorization ? 'auth' : 'anon'}`)
-    const body = JSON.parse(String(e.init?.body ?? '{}'))
-    const reply = (status: number, json: unknown) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(json) } })
-    if (server.isDown) return reply(503, { error: 'host down' })
-    if (path === '/v1/me') return reply(200, account())
-    if (path === '/v1/slots/spin') {
-      server.balance += 30 - body.bet
-      return reply(200, { grid: GRID, wins: [{ symbol: 'hay', count: 3, amount: 30, cells: [{ reel: 0, row: 0 }] }], win: 30, bet: body.bet, ...account() })
-    }
-    if (path === '/v1/lootbox') {
-      server.balance += 10000
-      return reply(200, { prize: { tokens: 10000, label: 'legendary' }, ...account() })
-    }
-    if (path === '/v1/refill') {
-      server.balance += 500
-      return reply(200, { refilled: 500, ...account() })
-    }
-    if (path === '/v1/poker/deal') {
-      if (server.dealStatus !== 200) return reply(server.dealStatus, { error: 'a hand is already open: draw first' })
-      server.balance -= body.bet
-      server.openHand = PAIR
-      return reply(200, { dealt: PAIR.dealt, made: PAIR.made, contributing: PAIR.contributing, ...account() })
-    }
-    if (path === '/v1/poker/draw') {
-      if (server.drawStatus !== 200) return reply(server.drawStatus, { error: 'no open hand: deal first' })
-      expect(body.holds).toEqual([0, 1])
-      server.balance += 30
-      server.openHand = null
-      return reply(200, { dealt: PAIR.dealt, final: ['As', 'Ah', 'Ac', '2d', '9s'], result: 'Three Aces', contributing: [0, 1, 2], win: 30, ...account() })
-    }
-    if (path === '/v1/logout') return reply(200, { loggedOut: true })
-    return reply(404, { error: 'no route' })
+  const opened: string[] = []
+  const launched: string[][] = []
+  const tools = { isError: false }
+  on('http.fetch', e => {
+    throw new Error(`the plugin made a network call: ${JSON.stringify(e)}`)
   })
   on('ui.toast', (_, e) => (toasts.push(JSON.stringify(e)), { value: undefined }))
   on('ui.open', (_, e) => (opened.push(e.id), { value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
+  on('process.run', (_, e) => (launched.push([...e.argv]), { value: { exitCode: 0, stdout: '', stderr: '' } } as never))
   on('tool.register', () => ({ value: { tool: 'mcp__terminal-slots__wager' } }))
   on('command.register', () => ({ value: { command: 'slots' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  return { seen, server, opened, toasts }
+  on('tool.call', () => ({ result: {}, ...(tools.isError ? { isError: true } : {}) }) as never)
+  on('turn.complete', () => ({ text: '' }))
+  return { toasts, opened, launched, tools }
 }
 
+// Card text as the narrow pane draws it → card code.
+const CODE = new Map([...'23456789TJQKA'].flatMap(r => [...'shdc'].map(u => [cardText(r + u), r + u] as const)))
+
+// The five cards a narrow (< 30 columns) pane shows, and which are bracketed (held, or paying once drawn).
+const shownCards = async (ui: { drawn: () => Promise<unknown> }) => {
+  const row = textsOf(await ui.drawn()).filter(x => /^[ [].{2,3}[ \]]$/.test(x.text) && CODE.has(x.text.slice(1, -1)))
+  return { cards: row.map(x => CODE.get(x.text.slice(1, -1))!), marked: row.flatMap((x, i) => (x.text.startsWith('[') ? [i] : [])), row }
+}
+
+// Earns a bonus the way Claude does: a commit that ran.
+const commit = ($: any) => $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })
+
+const start = ($: { session: { start: (a: { cwd: string; surface: 'terminal'; isInteractive: boolean }) => Promise<unknown> } }) =>
+  $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+const label = async (ui: { find: (q: never) => Promise<unknown> }, key: string) =>
+  ((await ui.find({ type: 'Button', key } as never)) as { props?: { label?: string } } | undefined)?.props?.label
+const text = async (ui: { find: (q: never) => Promise<unknown> }, re: RegExp) =>
+  ((await ui.find({ type: 'Text', text: re } as never)) as { text?: string } | undefined)?.text
 
 // Moves a drawing's frame clock (a terminal mount has it; PANE is typed loosely).
 const frames = (ui: unknown, ms: number) => (ui as { advance: (ms: number) => Promise<void> }).advance(ms)
 
-// Reads one reel cell from what the reels Client drew: its border colour, label and weight.
 type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
 const walk = (n: unknown, fn: (n: Node) => void) => {
   if (!n || typeof n !== 'object') return
@@ -149,8 +160,6 @@ const cellOf = (tree: unknown, reel: number, row: number) => {
     bold: label?.props?.bold,
   }
 }
-
-// Every Text in a drawn tree, with its colour.
 const textsOf = (tree: unknown) => {
   const out: { text: string; color?: string }[] = []
   walk(tree, n => {
@@ -159,199 +168,251 @@ const textsOf = (tree: unknown) => {
   return out
 }
 
-const signedIn = (on: On) => mock.store(on, { session: 'session-token-for-tests-0123456789' })
-const start = ($: { session: { start: (a: { cwd: string; surface: 'terminal'; isInteractive: boolean }) => Promise<unknown> } }) =>
-  $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-const label = async (ui: { find: (q: never) => Promise<unknown> }, key: string) =>
-  ((await ui.find({ type: 'Button', key } as never)) as { props?: { label?: string } } | undefined)?.props?.label
+// Claude ending a main-loop turn after `tools` tool calls.
+const claudeTurn = async ($: any, tools: number, extra: Record<string, unknown> = {}) => {
+  for (let i = 0; i < tools; i++) await $.tool.call({ tool: 'Read', file_path: '/x', ...('agentId' in extra ? { agentId: extra.agentId } : {}) })
+  await $.turn.complete({ turnId: 't', reason: 'answer', answer: 'done', durationMs: 1000, isAborted: extra.reason === 'aborted', ...extra })
+  // The play starts after the turn's result has gone on: let it land.
+  for (let i = 0; i < 20; i++) await Promise.resolve()
+}
 
-test('signed out, the pane offers GitHub sign-in on every surface', async ($, on) => {
+test('no sign-in: the pane plays straight away on every surface, and nothing to sign in to', async ($, on) => {
+  mock.store(on, { session: 'an-old-game-server-token' })
+  engine(on)
+  await start($)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(PANE(surface))
+    expect(await ui.find({ type: 'Button', key: 'spin' } as never)).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'signin' } as never)).toBeFalsy()
+    expect(await text(ui, /tokens/)).toBeFalsy()
+    await ui.unmount()
+  }
+})
+
+test('SPIN lands a local spin and scores it; a double press spins once', async ($, on) => {
   mock.store(on)
-  fakeHost(on)
-  await start($)
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount(PANE(surface))
-    expect(await ui.find({ type: 'Button', key: 'signin' } as never)).toBeTruthy()
-    await ui.unmount()
-  }
-})
-
-test('signed in: spin lands the server grid; poker auto-holds a paying deal and draws', async ($, on) => {
-  signedIn(on)
   const clock = mock.clock(on)
-  const host = fakeHost(on)
+  engine(on)
   await start($)
-  expect(host.seen).toContain('GET /v1/me auth')
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount(PANE(surface))
-    expect((await ui.find({ type: 'Text', text: /tokens$/ }))?.text).toMatch(/tokens/)
-    expect(await ui.find({ type: 'Button', key: 'rich' } as never)).toBeTruthy()
-    await ui.unmount()
+  const ui = await $.ui.mount(PANE('terminal'))
+  for (let n = 1; n <= 3; n++) {
+    await ui.press({ key: 'spin' })
+    await ui.press({ key: 'spin' })
+    expect(await text(ui, /spinning/)).toBeTruthy()
+    await clock.advance(1000)
+    const reels = (await ui.find({ type: 'Client', key: 'reels' } as never)) as { props?: { props?: { cells?: unknown[] } } }
+    const message = (await text(ui, /^WIN \d+$|^No win\.$/)) ?? ''
+    // A win lights cells; no win lights none.
+    expect(message.startsWith('WIN')).toBe((reels?.props?.props?.cells ?? []).length > 0)
+    expect(await text(ui, /plays ·/)).toMatch(new RegExp(`^${n} plays ·`)) // two presses, one play
   }
+  await ui.unmount()
+})
 
+test('poker: a paying deal starts held, holds toggle, DRAW scores the cards it shows', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  await start($)
+  const narrow = await $.ui.mount(PANE('terminal', 29))
+  const wide = await $.ui.mount(PANE('desktop'))
+  await wide.press({ key: 'tab-poker' })
+  for (let round = 0; round < 5; round++) {
+    await wide.press({ key: 'deal' })
+    const dealt = await shownCards(narrow)
+    expect(dealt.cards).toHaveLength(5)
+    const made = scoreDealt(royalDraw, dealt.cards, BET)
+    // Exactly the paying cards start held.
+    expect(dealt.marked).toEqual(made.win > 0 ? made.result.contributing : [])
+    if (made.win > 0) expect(await text(wide, /You hold:/)).toMatch(new RegExp(`You hold: ${made.result.label}`))
+    // Clicking a face flips its hold, like its HOLD button; flipped back, the paying cards stay held.
+    const was = dealt.marked.includes(0) ? 'HELD' : 'HOLD'
+    await wide.press({ key: 'card-0' })
+    expect(await label(wide, 'hold-0')).toBe(was === 'HELD' ? 'HOLD' : 'HELD')
+    await wide.press({ key: 'hold-0' })
+    expect(await label(wide, 'hold-0')).toBe(was)
+    await wide.press({ key: 'draw' })
+    const final = await shownCards(narrow)
+    for (const i of dealt.marked) expect(final.cards[i]).toBe(dealt.cards[i]) // held cards stay
+    const scored = scoreDealt(royalDraw, final.cards, BET)
+    const name = scored.result.label
+    expect(await text(wide, new RegExp(`^${name}`))).toBe(scored.win > 0 ? `${name}! WIN ${Math.floor(scored.win)}` : `${name}. No win.`)
+  }
+  await narrow.unmount()
+  await wide.unmount()
+})
+
+test("a busy Claude turn spins on the Slots tab; a short one, a subagent's or an interrupted one doesn't", async ($, on) => {
+  mock.store(on)
+  const clock = mock.clock(on)
+  engine(on)
+  await start($)
   const ui = await $.ui.mount(PANE('terminal'))
-  await ui.press({ key: 'spin' })
-  expect(await ui.find({ type: 'Text', text: /spinning/ })).toBeTruthy()
+  await claudeTurn($, 2)
+  expect(await text(ui, /spinning/)).toBeFalsy()
+  await claudeTurn($, 5, { agentId: 'sub-1' })
+  expect(await text(ui, /spinning/)).toBeFalsy()
+  // A subagent's (or a compaction fork's) tools inside the main turn don't count towards it.
+  for (let i = 0; i < 5; i++) await ($ as any).tool.call({ tool: 'Read', file_path: '/x', agentId: 'fork-1' })
+  await claudeTurn($, 1)
+  expect(await text(ui, /spinning/)).toBeFalsy()
+  await claudeTurn($, 5, { reason: 'aborted' })
+  await claudeTurn($, 1) // the aborted turn's calls don't carry over
+  expect(await text(ui, /spinning/)).toBeFalsy()
+  await claudeTurn($, 3)
+  expect(await text(ui, /spinning/)).toBeTruthy()
   await clock.advance(1000)
-  expect((await ui.find({ type: 'Text', text: /WIN \+30/ }))?.text).toBe('WIN +30')
-  // The reels Client got the server's grid and winning cells; once its frame clock has stopped all
-  // five reels, the winning cell's label is drawn bold in gold.
-  const reels = (await ui.find({ type: 'Client', key: 'reels' } as never)) as { props?: { props?: { grid?: unknown; cells?: unknown } } }
-  expect(reels?.props?.props?.grid).toEqual(GRID)
-  expect(reels?.props?.props?.cells).toEqual([{ reel: 0, row: 0 }])
-  await frames(ui, 1000)
-  expect(cellOf(await ui.drawn({ in: 'reels' } as never), 0, 0)).toMatchObject({ border: 'warning', label: 'HAY', bold: true })
-  expect(cellOf(await ui.drawn({ in: 'reels' } as never), 1, 0)).toMatchObject({ border: undefined, label: 'PIG', bold: false })
-
-  await ui.press({ key: 'tab-poker' })
-  expect(await ui.find({ type: 'Text', text: /WIN \+30/ })).toBeFalsy() // the slots result stays on its tab
-  await ui.press({ key: 'deal' })
-  expect(await ui.find({ type: 'Text', text: /You hold: Pair of Aces/ })).toBeTruthy()
-  // A paying dealt hand starts held, as on a video poker machine: no presses needed to keep it.
-  expect(await label(ui, 'hold-0')).toBe('HELD')
-  expect(await label(ui, 'hold-1')).toBe('HELD')
-  expect(await label(ui, 'hold-2')).toBe('HOLD')
-  await ui.press({ key: 'hold-2' })
-  await ui.press({ key: 'hold-2' })
-  await ui.press({ key: 'draw' })
-  expect((await ui.find({ type: 'Text', text: /Three Aces/ }))?.text).toBe('Three Aces! +30')
-  expect(host.seen.filter(s => s.includes('/v1/poker/'))).toEqual(['POST /v1/poker/deal auth', 'POST /v1/poker/draw auth'])
+  expect(await text(ui, /^Claude spun: /)).toBeTruthy()
   await ui.unmount()
 })
 
-test('a paying hand left open is resumed held after a restart', async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  host.server.openHand = PAIR
+test("on the Poker tab Claude deals and draws after 4 s, unless the player takes the hand", async ($, on) => {
+  mock.store(on)
+  const clock = mock.clock(on)
+  engine(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'tab-poker' })
-  expect(await ui.find({ type: 'Text', text: /Hand resumed\. You hold: Pair of Aces/ })).toBeTruthy()
-  expect(await label(ui, 'hold-0')).toBe('HELD')
-  expect(await label(ui, 'hold-1')).toBe('HELD')
-  await ui.unmount()
-})
-
-test('a hand finished elsewhere: DRAW gets 409, the pane follows the server back to DEAL', async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  await ui.press({ key: 'tab-poker' })
-  await ui.press({ key: 'deal' })
-  host.server.openHand = null // drawn on another device
-  host.server.drawStatus = 409
-  await ui.press({ key: 'draw' })
-  expect(await ui.find({ type: 'Button', key: 'deal' } as never)).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /finished elsewhere/ })).toBeTruthy()
-  await ui.unmount()
-})
-
-test('a deal that landed but whose answer was lost: the next DEAL shows the open hand', async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  await ui.press({ key: 'tab-poker' })
-  host.server.openHand = PAIR
-  host.server.dealStatus = 409
-  await ui.press({ key: 'deal' })
+  await claudeTurn($, 3)
+  expect(await text(ui, /Claude dealt\./)).toBeTruthy()
   expect(await ui.find({ type: 'Button', key: 'draw' } as never)).toBeTruthy()
-  expect(await label(ui, 'hold-0')).toBe('HELD')
+  await clock.advance(4000)
+  expect(await ui.find({ type: 'Button', key: 'deal' } as never)).toBeTruthy() // drawn by itself
+
+  await claudeTurn($, 3)
+  await ui.drawn() // let Claude's deal draw before the player reaches for it
+  await ui.press({ key: 'hold-2' }) // the player takes over
+  await clock.advance(10_000)
+  expect(await ui.find({ type: 'Button', key: 'draw' } as never)).toBeTruthy() // still waiting for them
+  await claudeTurn($, 3) // mid-hand: Claude's turn doesn't deal over it
+  expect(await ui.find({ type: 'Button', key: 'draw' } as never)).toBeTruthy()
   await ui.unmount()
 })
 
-test('a slow spin result never overwrites a newer balance', async ($, on) => {
-  signedIn(on)
+test("Claude's auto-draw never acts on a later hand", async ($, on) => {
+  mock.store(on)
   const clock = mock.clock(on)
-  const host = fakeHost(on)
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  await ui.press({ key: 'spin' }) // answered now, shown after ~0.9 s with balance 1020
-  await ui.press({ key: 'loot' }) // newer: balance 11020
-  await clock.advance(1000)
-  expect(host.server.balance).toBe(11020)
-  expect((await ui.find({ type: 'Text', text: /tokens$/ }))?.text).toBe('11,020 tokens')
-  await ui.unmount()
-})
-
-test('a double press on SPIN spins once', async ($, on) => {
-  signedIn(on)
-  const clock = mock.clock(on)
-  const host = fakeHost(on)
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  await ui.press({ key: 'spin' })
-  await ui.press({ key: 'spin' })
-  await clock.advance(1000)
-  expect(host.seen.filter(s => s.includes('/v1/slots/spin'))).toHaveLength(1)
-  await ui.unmount()
-})
-
-test('signing out clears the open hand', async ($, on) => {
-  signedIn(on)
-  fakeHost(on)
+  engine(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'tab-poker' })
-  await ui.press({ key: 'deal' })
-  await $.command.run({ command: 'slots', args: 'logout' } as never)
-  expect(await ui.find({ type: 'Button', key: 'signin' } as never)).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /A♠/ })).toBeFalsy()
+  await claudeTurn($, 3)
+  await clock.advance(1000)
+  await ui.press({ key: 'draw' }) // the player draws Claude's hand early
+  await ui.press({ key: 'deal' }) // and deals their own
+  await clock.advance(5000) // the old 4 s timer's time passes
+  expect(await ui.find({ type: 'Button', key: 'draw' } as never)).toBeTruthy() // their hand is untouched
   await ui.unmount()
 })
 
-test('host unreachable at startup keeps the session and says so', async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  host.server.isDown = true
+test('nothing plays on the Pomodoro tab or with the pane hidden', async ($, on) => {
+  mock.store(on)
+  engine(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
-  expect(await ui.find({ type: 'Text', text: /Can't reach the game host/ })).toBeTruthy()
-  // Kept: an outage is not a sign-out, so nothing logged the session out.
-  expect(host.seen).not.toContain('POST /v1/logout auth')
+  await ui.press({ key: 'tab-pomodoro' })
+  await claudeTurn($, 5)
+  await ui.press({ key: 'tab-slots' })
+  expect(await text(ui, /spinning|Claude spun/)).toBeFalsy()
+  await $.command.run({ command: 'slots', args: '' } as never) // hide
+  await claudeTurn($, 5)
+  expect(await text(ui, /spinning|Claude spun/)).toBeFalsy()
+  await ui.unmount()
+})
+
+test('a commit earns a bonus: the next spin wins big, once, and a PR outranks it', async ($, on) => {
+  mock.store(on)
+  const clock = mock.clock(on)
+  const host = engine(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ($ as any).tool.call({ tool: 'Bash', command: 'git add -A && git commit -m "feat: x"' })
+  expect(host.toasts.some(t => /Committed! Your next spin or deal is a 🏆 bonus/.test(t))).toBe(true)
+  expect(await text(ui, /next play is a bonus/)).toBeTruthy()
+  const band = await $.ui.mount(BAND('terminal'))
+  expect(await band.find({ type: 'Text', text: /bonus ready/ })).toBeTruthy()
+  await band.unmount()
+  await ($ as any).tool.call({ tool: 'Bash', command: 'git commit -m again' }) // one bonus waits at a time
+  expect(host.toasts.filter(t => /Committed!/.test(t))).toHaveLength(1)
+  await ($ as any).tool.call({ tool: 'Bash', command: 'gh pr create -f' })
+  expect(host.toasts.some(t => /Pull request opened!/.test(t))).toBe(true)
+
+  await ui.press({ key: 'spin' })
+  expect(await text(ui, /bonus spin/)).toBeTruthy()
+  await clock.advance(1000)
+  const won = Number((await text(ui, /^🏆 Bonus! WIN \d+$/))?.match(/\d+/)?.[0])
+  expect(won).toBeGreaterThanOrEqual(BONUS_SPIN_WIN)
+  expect(await text(ui, /next play is a bonus/)).toBeFalsy()
+  await ui.unmount()
+})
+
+test("a failed command earns nothing; tests passing again after a failure do; the bonus survives a reload", async ($, on) => {
+  mock.store(on)
+  const host = engine(on)
+  await start($)
+  host.tools.isError = true
+  await ($ as any).tool.call({ tool: 'Bash', command: 'git commit -m x' })
+  await ($ as any).tool.call({ tool: 'Bash', command: 'pnpm test' })
+  host.tools.isError = false
+  expect(host.toasts.some(t => /bonus/.test(t))).toBe(false)
+  await ($ as any).tool.call({ tool: 'Bash', command: 'pnpm test' })
+  expect(host.toasts.some(t => /Tests pass again!/.test(t))).toBe(true)
+  await start($) // a reload
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-poker' })
+  expect(await text(ui, /next play is a bonus/)).toBeTruthy()
+  await ui.press({ key: 'deal' })
+  expect(await text(ui, /^🏆 Bonus deal!/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('💖 Sponsor opens the GitHub Sponsors page and nothing else', async ($, on) => {
+  mock.store(on)
+  const host = engine(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'sponsor' })
+  expect(host.launched).toEqual([['open', 'https://github.com/sponsors/altoption']])
   await ui.unmount()
 })
 
 test('narrow pane: poker draws inline text, held cards in brackets, red suits red, no wrapping', async ($, on) => {
-  signedIn(on)
-  fakeHost(on)
+  mock.store(on)
+  engine(on)
   await start($)
+  await commit($) // a bonus deal: Three of a Kind or better, so some cards are held
   const ui = await $.ui.mount(PANE('terminal', 29))
   await ui.press({ key: 'tab-poker' })
   await ui.press({ key: 'deal' })
   const texts = textsOf(await ui.drawn())
-  const row = ['[A♠]', '[A♥]', ' 3♣ ', ' K♦ ', ' 7♠ '].map(t => texts.find(x => x.text === t))
-  expect(row.map(x => x?.color)).toEqual([undefined, 'error', undefined, 'error', undefined])
-  expect(row.map(x => x?.text).join('').length).toBeLessThanOrEqual(29)
+  const row = texts.filter(x => /^[ [][0-9AKQJT]{1,2}[♠♥♦♣][ \]]$/.test(x.text))
+  expect(row).toHaveLength(5)
+  for (const x of row) expect(x.color).toBe(/[♥♦]/.test(x.text) ? 'error' : undefined)
+  expect(row.some(x => x.text.startsWith('['))).toBe(true)
+  expect(row.map(x => x.text).join('').length).toBeLessThanOrEqual(29)
   await ui.unmount()
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`card colours: hearts and diamonds red, spades and clubs plain (${surface})`, async ($, on) => {
-    signedIn(on)
-    fakeHost(on)
+    mock.store(on)
+    engine(on)
     await start($)
     const ui = await $.ui.mount(PANE(surface))
     await ui.press({ key: 'tab-poker' })
     await ui.press({ key: 'deal' })
-    const texts = textsOf(await ui.drawn())
-    const colourOf = (suit: string) => texts.find(x => x.text.includes(suit))?.color
-    expect(colourOf('♥')).toBe('error')
-    expect(colourOf('♦')).toBe('error')
-    expect(colourOf('♠')).toBe(undefined)
-    expect(colourOf('♣')).toBe(undefined)
+    for (const t of textsOf(await ui.drawn()).filter(x => /[♠♥♦♣]/.test(x.text) && x.text.length < 40)) {
+      expect(t.color).toBe(/[♥♦]/.test(t.text) ? 'error' : undefined)
+    }
     await ui.unmount()
   })
 }
 
-test('the band above the prompt shows the balance and toggles the pane', async ($, on) => {
-  signedIn(on)
-  const { opened } = fakeHost(on)
+test('the band above the prompt toggles the pane', async ($, on) => {
+  mock.store(on)
+  const { opened } = engine(on)
   await start($)
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount(BAND(surface))
-    expect(await band.find({ type: 'Text', text: /1,000 tokens/ })).toBeTruthy()
     expect(await label(band, 'slots-toggle')).toBe('Hide')
     await band.press({ key: 'slots-toggle' })
     expect(await label(band, 'slots-toggle')).toBe('Show')
@@ -362,219 +423,43 @@ test('the band above the prompt shows the balance and toggles the pane', async (
   expect(opened.filter(id => id === 'slots').length).toBeGreaterThanOrEqual(2)
 })
 
-test("broke: the pane offers a free refill beside I'm Rich", async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  host.server.balance = 4
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  expect(await ui.find({ type: 'Button', key: 'rich-broke' } as never)).toBeTruthy()
-  await ui.press({ key: 'refill' })
-  expect((await ui.find({ type: 'Text', text: /Refilled/ }))?.text).toMatch(/\+500/)
-  expect(await ui.find({ type: 'Button', key: 'refill' } as never)).toBeFalsy()
-  expect(host.seen).toContain('POST /v1/refill auth')
-  await ui.unmount()
-})
-
-for (const surface of ['terminal', 'desktop'] as const) {
-  test(`clicking a card face holds or releases it, like its HOLD button (${surface})`, async ($, on) => {
-    signedIn(on)
-    fakeHost(on)
-    await start($)
-    const ui = await $.ui.mount(PANE(surface))
-    await ui.press({ key: 'tab-poker' })
-    await ui.press({ key: 'deal' })
-    expect(await label(ui, 'hold-2')).toBe('HOLD')
-    await ui.press({ key: 'card-2' })
-    expect(await label(ui, 'hold-2')).toBe('HELD')
-    await ui.press({ key: 'card-0' }) // auto-held pair card: releases it
-    expect(await label(ui, 'hold-0')).toBe('HOLD')
-    await ui.unmount()
-  })
-}
-
 test('the reels spin on the frame clock, then stop left to right before the win lights up', async ($, on) => {
-  signedIn(on)
+  mock.store(on)
   const clock = mock.clock(on)
-  fakeHost(on)
+  engine(on)
   await start($)
+  await commit($) // a bonus spin: sure to win
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'spin' })
   const before = cellOf(await ui.drawn({ in: 'reels' } as never), 2, 1).glyph
   await frames(ui, 50)
-  const after = cellOf(await ui.drawn({ in: 'reels' } as never), 2, 1).glyph
-  expect(after).not.toBe(before) // a blur of symbols, one frame to the next
+  expect(cellOf(await ui.drawn({ in: 'reels' } as never), 2, 1).glyph).not.toBe(before)
   expect(cellOf(await ui.drawn({ in: 'reels' } as never), 2, 1).border).toBe('subtle')
 
   await clock.advance(1000) // the result lands
+  const reels = (await ui.find({ type: 'Client', key: 'reels' } as never)) as { props?: { props?: { cells: { reel: number; row: number }[] } } }
+  const win = reels!.props!.props!.cells[0]!
   await frames(ui, 150) // first reel stopped, last still spinning
   let tree = await ui.drawn({ in: 'reels' } as never)
-  expect(cellOf(tree, 0, 0)).toMatchObject({ label: 'HAY', border: undefined })
+  expect(cellOf(tree, 0, 0).border).not.toBe('subtle')
   expect(cellOf(tree, 4, 0).border).toBe('subtle')
 
   await frames(ui, 600) // all stopped: now the win is gold
   tree = await ui.drawn({ in: 'reels' } as never)
-  expect(cellOf(tree, 4, 0).border).toBe(undefined)
-  expect(cellOf(tree, 0, 0)).toMatchObject({ border: 'warning', bold: true })
-  await ui.unmount()
-})
-
-for (const surface of ['terminal', 'desktop'] as const) {
-  test(`a supporter's name is drawn in rainbow letters with a gold star (${surface})`, async ($, on) => {
-    signedIn(on)
-    const host = fakeHost(on)
-    host.server.isMember = true
-    await start($)
-    const ui = await $.ui.mount(PANE(surface))
-    const texts = textsOf(await ui.drawn())
-    const i = texts.findIndex(t => t.text === 'o')
-    const letters = texts.slice(i, i + 4)
-    expect(letters.map(t => t.text).join('')).toBe('octo')
-    expect(new Set(letters.map(t => t.color)).size).toBe(4) // each letter its own colour
-    expect(texts.find(t => t.text.includes('★'))?.color).toBe('warning')
-    // Inline, not stacked: every letter sits inside one Text that holds the whole name.
-    let parent: Node | undefined
-    walk(await ui.drawn(), n => {
-      if (n.type === 'Text' && (n.children ?? []).filter(c => (c as Node)?.type === 'Text').length >= 4) parent = n
-    })
-    expect(textsOf(parent).slice(1).map(t => t.text).join('')).toMatch(/^octo/)
-    await ui.unmount()
-  })
-}
-
-test("a non-supporter's name stays plain, with no star", async ($, on) => {
-  signedIn(on)
-  fakeHost(on)
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  const texts = textsOf(await ui.drawn())
-  expect(texts.some(t => t.text.includes('octo'))).toBe(true)
-  expect(texts.some(t => t.text.includes('★') || t.text.includes('⭐'))).toBe(false)
-  await ui.unmount()
-})
-
-test("after Free tokens, a non-supporter sees an I'm Rich nudge until their next action", async ($, on) => {
-  signedIn(on)
-  const clock = mock.clock(on)
-  fakeHost(on)
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeFalsy()
-  await ui.press({ key: 'loot' })
-  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeTruthy()
-  await ui.press({ key: 'spin' })
-  await clock.advance(1000)
-  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeFalsy()
-  await ui.unmount()
-})
-
-test("a supporter never sees the nudge after Free tokens", async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  host.server.isMember = true
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  await ui.press({ key: 'loot' })
-  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeFalsy()
-  await ui.unmount()
-})
-
-test("can't spin a bet larger than the balance: SPIN turns to plain text with the reason", async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  host.server.balance = 17
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  expect(await ui.find({ type: 'Button', key: 'spin' } as never)).toBeTruthy() // bet 10 ≤ 17
-  await ui.press({ key: 'slot-bet' }) // → 20
-  expect(await ui.find({ type: 'Button', key: 'spin' } as never)).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /Bet 20 is more than your 17 tokens/ })).toBeTruthy()
-  await ui.press({ key: 'slot-bet' }) // 50
-  await ui.press({ key: 'slot-bet' }) // 100
-  await ui.press({ key: 'slot-bet' }) // back to 10
-  expect(await ui.find({ type: 'Button', key: 'spin' } as never)).toBeTruthy()
-  expect(host.seen.filter(x => x.includes('/v1/slots/spin'))).toHaveLength(0)
-  await ui.unmount()
-})
-
-test("can't deal a bet larger than the balance", async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  host.server.balance = 7
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  await ui.press({ key: 'tab-poker' }) // poker bet 10 > 7
-  expect(await ui.find({ type: 'Button', key: 'deal' } as never)).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /Bet 10 is more than your 7 tokens/ })).toBeTruthy()
+  expect(cellOf(tree, win.reel, win.row)).toMatchObject({ border: 'warning', bold: true })
   await ui.unmount()
 })
 
 test("Claude's calibration line stays hidden until Claude has made a prediction", async ($, on) => {
-  signedIn(on)
-  fakeHost(on)
+  mock.store(on)
+  engine(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
   expect(await ui.find({ type: 'Text', text: /calibration|Brier/ })).toBeFalsy()
   await ui.unmount()
 })
 
-// The row a keyed Button sits in: the element whose own children include it.
-const rowOf = (tree: unknown, key: string) => {
-  let row: Node | undefined
-  walk(tree, n => {
-    if ((n.children ?? []).some(c => (c as Node)?.type === 'Button' && (c as Node).props?.key === key)) row = n
-  })
-  return row
-}
-const keysIn = (row: Node | undefined) => (row?.children ?? []).map(c => (c as Node)?.props?.key).filter(Boolean)
-
-test("I'm Rich buttons sit in the same row as their neighbours, never on a line of their own", async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  host.server.balance = 4 // broke: the refill row shows its support button too
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  const tree = await ui.drawn()
-  expect(keysIn(rowOf(tree, 'loot'))).toEqual(expect.arrayContaining(['loot', 'rich']))
-  expect(keysIn(rowOf(tree, 'refill'))).toEqual(expect.arrayContaining(['refill', 'rich-broke']))
-  await ui.unmount()
-})
-
-test("I'm Rich :) opens the creator's GitHub Sponsors page; Free tokens is the 25-minute claim", async ($, on) => {
-  signedIn(on)
-  const host = fakeHost(on)
-  const opened: string[][] = []
-  on('process.run', (_, e) => (opened.push([...e.argv]), { value: { exitCode: 0, stdout: '', stderr: '' } } as never))
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  expect(await label(ui, 'rich')).toBe("💰 I'm Rich :)")
-  expect(await label(ui, 'loot')).toBe('🎁 Free tokens')
-  await ui.press({ key: 'rich' })
-  expect(opened).toEqual([['open', 'https://github.com/sponsors/altoption']])
-  expect(host.seen.some(x => x.includes('/v1/lootbox'))).toBe(false) // donating never claims tokens
-  await ui.unmount()
-})
-
-test('while free tokens recharge, the button is a countdown that ticks down, then comes back', async ($, on) => {
-  signedIn(on)
-  const clock = mock.clock(on)
-  const host = fakeHost(on)
-  host.server.nextLootboxMs = (3 * 60 + 12) * 60_000 // 3h 12m from the mock clock's start
-  await start($)
-  const ui = await $.ui.mount(PANE('terminal'))
-  expect(await ui.find({ type: 'Button', key: 'loot' } as never)).toBeFalsy()
-  expect((await ui.find({ type: 'Text', text: /Free tokens in/ }))?.text).toBe('[ 🎁 Free tokens in 3h 12m ]')
-  await clock.advance(60 * 60_000)
-  expect((await ui.find({ type: 'Text', text: /Free tokens in/ }))?.text).toBe('[ 🎁 Free tokens in 2h 12m ]')
-  await clock.advance((2 * 60 + 12) * 60_000)
-  expect(await ui.find({ type: 'Button', key: 'loot' } as never)).toBeTruthy()
-  await ui.unmount()
-})
-
 const MIN = 60_000
-const text = async (ui: { find: (q: never) => Promise<unknown> }, re: RegExp) =>
-  ((await ui.find({ type: 'Text', text: re } as never)) as { text?: string } | undefined)?.text
-
 test('pomodoro rules: four focus sessions earn the long break; a skipped one counts for nothing', async () => {
   let p = newPomo()
   for (let i = 1; i <= 3; i++) {
@@ -599,7 +484,7 @@ test('pomodoro rules: four focus sessions earn the long break; a skipped one cou
 test('the Pomodoro tab works signed out: start, pause, resume, and a toast when focus ends', async ($, on) => {
   mock.store(on)
   const clock = mock.clock(on)
-  const host = fakeHost(on)
+  const host = engine(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'tab-pomodoro' })
@@ -639,7 +524,7 @@ test('the Pomodoro tab works signed out: start, pause, resume, and a toast when 
 test('a running pomodoro carries on after a restart', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on, { pomo: { ...newPomo(), endsAt: 10 * MIN } })
-  const host = fakeHost(on)
+  const host = engine(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'tab-pomodoro' })
@@ -653,7 +538,7 @@ test('a pomodoro that ended while Claude Code was closed is finished, and says s
   const clock = mock.clock(on)
   await clock.advance(60 * MIN)
   mock.store(on, { pomo: { ...newPomo(), endsAt: 5 * MIN } })
-  const host = fakeHost(on)
+  const host = engine(on)
   await start($)
   expect(host.toasts.some(t => /Pomodoro done \(while you were away\)/.test(t))).toBe(true)
   const ui = await $.ui.mount(PANE('terminal'))
