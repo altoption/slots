@@ -183,12 +183,6 @@ async function signOut($: EngineInterface): Promise<void> {
 
 // Set synchronously, before any await, so a double press can't start two requests.
 let inFlight = false
-let reelTicker: { cancel: () => void } | null = null
-
-function stopReels(): void {
-  reelTicker?.cancel()
-  reelTicker = null
-}
 
 async function spin($: EngineInterface): Promise<void> {
   if (inFlight) return
@@ -196,8 +190,6 @@ async function spin($: EngineInterface): Promise<void> {
   const at = takeTicket()
   const v = await read($, view)
   await update($, view, v => ({ ...v, isBusy: true, slots: { ...v.slots, isSpinning: true, cells: [], win: 0, message: '' } }))
-  stopReels()
-  reelTicker = $.clock.every(90, () => void update($, view, v => ({ ...v, slots: { ...v.slots, grid: randomGrid(Math.random) } })))
   const startedAt = await $.clock.now()
   const r = await api($, 'POST', '/v1/slots/spin', { bet: v.slots.bet, entryId: entryId() })
   // Let the reels run at least ~0.9 s so the result lands like a spin, not a flicker.
@@ -205,8 +197,8 @@ async function spin($: EngineInterface): Promise<void> {
   $.clock.after(wait, () => void landSpin($, r, at))
 }
 
+// The reels Client animates on its own clock; this only hands it the result.
 async function landSpin($: EngineInterface, r: ApiResult, at: number): Promise<void> {
-  stopReels()
   inFlight = false
   if (r.status !== 200) {
     await update($, view, v => ({
@@ -399,7 +391,6 @@ export const register: Register = on => {
     await $.command.register({ name: 'slots', description: 'Show or hide Terminal Slots; "/slots logout" to sign out' })
     await calibrate($, () => undefined)
     // A reload re-runs this but drops timers: nothing can still be spinning or in flight.
-    stopReels()
     inFlight = false
     await update($, view, v => ({ ...v, isBusy: false, slots: { ...v.slots, isSpinning: false } }))
     if (await $.store.get('session')) {
@@ -448,7 +439,10 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button } = elements
+    // The animated reels need a surface that runs Client modules (terminal, desktop); others get text.
+    const Client = 'Client' in elements ? elements.Client : null
     const v = await read($, view)
     const columns = e.props.bodyColumns
     const lines = (rows: string[]) => rows.map(row => <Text>{row}</Text>)
@@ -524,7 +518,15 @@ export const register: Register = on => {
           {header}
           {brokeRow}
           <Text> </Text>
-          {lines(renderReels(v.slots.grid, columns, v.slots.cells))}
+          {Client ? (
+            <Client
+              key="reels"
+              module="./reels.tsx"
+              props={{ grid: v.slots.grid, cells: v.slots.cells, isSpinning: v.slots.isSpinning, columns }}
+            />
+          ) : (
+            lines(renderReels(v.slots.grid, columns, v.slots.isSpinning ? [] : v.slots.cells))
+          )}
           <Text bold>{v.slots.isSpinning ? 'spinning…' : v.slots.message || v.message || ' '}</Text>
           <Box>
             <Button key="spin" variant="primary" label="SPIN" onPress={() => void spin($)} />

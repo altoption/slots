@@ -122,6 +122,32 @@ const fakeHost = (on: On) => {
   return { seen, server, opened }
 }
 
+
+// Moves a drawing's frame clock (a terminal mount has it; PANE is typed loosely).
+const frames = (ui: unknown, ms: number) => (ui as { advance: (ms: number) => Promise<void> }).advance(ms)
+
+// Reads one reel cell from what the reels Client drew: its border colour, label and weight.
+type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+const walk = (n: unknown, fn: (n: Node) => void) => {
+  if (!n || typeof n !== 'object') return
+  fn(n as Node)
+  for (const c of (n as Node).children ?? []) walk(c, fn)
+}
+const cellOf = (tree: unknown, reel: number, row: number) => {
+  let cell: Node | undefined
+  walk(tree, n => {
+    if (n.props?.key === `cell-${reel}-${row}`) cell = n
+  })
+  const texts = (cell?.children ?? []) as Node[]
+  const label = texts[1]
+  return {
+    border: cell?.props?.borderColor as string | undefined,
+    glyph: (texts[0]?.children ?? [])[0],
+    label: label ? (label.children ?? [])[0] : undefined,
+    bold: label?.props?.bold,
+  }
+}
+
 const signedIn = (on: On) => mock.store(on, { session: 'session-token-for-tests-0123456789' })
 const start = ($: { session: { start: (a: { cwd: string; surface: 'terminal'; isInteractive: boolean }) => Promise<unknown> } }) =>
   $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -157,7 +183,14 @@ test('signed in: spin lands the server grid; poker auto-holds a paying deal and 
   expect(await ui.find({ type: 'Text', text: /spinning/ })).toBeTruthy()
   await clock.advance(1000)
   expect((await ui.find({ type: 'Text', text: /WIN \+30/ }))?.text).toBe('WIN +30')
-  expect(await ui.find({ type: 'Text', text: /HAY\*/ })).toBeTruthy()
+  // The reels Client got the server's grid and winning cells; once its frame clock has stopped all
+  // five reels, the winning cell's label is drawn bold in gold.
+  const reels = (await ui.find({ type: 'Client', key: 'reels' } as never)) as { props?: { props?: { grid?: unknown; cells?: unknown } } }
+  expect(reels?.props?.props?.grid).toEqual(GRID)
+  expect(reels?.props?.props?.cells).toEqual([{ reel: 0, row: 0 }])
+  await frames(ui, 1000)
+  expect(cellOf(await ui.drawn({ in: 'reels' } as never), 0, 0)).toMatchObject({ border: 'warning', label: 'HAY', bold: true })
+  expect(cellOf(await ui.drawn({ in: 'reels' } as never), 1, 0)).toMatchObject({ border: undefined, label: 'PIG', bold: false })
 
   await ui.press({ key: 'tab-poker' })
   expect(await ui.find({ type: 'Text', text: /WIN \+30/ })).toBeFalsy() // the slots result stays on its tab
@@ -329,3 +362,29 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.unmount()
   })
 }
+
+test('the reels spin on the frame clock, then stop left to right before the win lights up', async ($, on) => {
+  signedIn(on)
+  const clock = mock.clock(on)
+  fakeHost(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'spin' })
+  const before = cellOf(await ui.drawn({ in: 'reels' } as never), 2, 1).glyph
+  await frames(ui, 50)
+  const after = cellOf(await ui.drawn({ in: 'reels' } as never), 2, 1).glyph
+  expect(after).not.toBe(before) // a blur of symbols, one frame to the next
+  expect(cellOf(await ui.drawn({ in: 'reels' } as never), 2, 1).border).toBe('subtle')
+
+  await clock.advance(1000) // the result lands
+  await frames(ui, 150) // first reel stopped, last still spinning
+  let tree = await ui.drawn({ in: 'reels' } as never)
+  expect(cellOf(tree, 0, 0)).toMatchObject({ label: 'HAY', border: undefined })
+  expect(cellOf(tree, 4, 0).border).toBe('subtle')
+
+  await frames(ui, 600) // all stopped: now the win is gold
+  tree = await ui.drawn({ in: 'reels' } as never)
+  expect(cellOf(tree, 4, 0).border).toBe(undefined)
+  expect(cellOf(tree, 0, 0)).toMatchObject({ border: 'warning', bold: true })
+  await ui.unmount()
+})
