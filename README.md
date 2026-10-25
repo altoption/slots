@@ -51,7 +51,7 @@ What changed in each release: [CHANGELOG](CHANGELOG.md).
 - **Slots**: Barn of Fortune, 5 reels × 3 rows, 10 lines. Bets 10/20/50/100.
 - **Poker**: Royal Draw, Jacks or Better. Deal, then click a card (or press 1–5) to hold it, then
   DRAW. A dealt hand that already pays starts held, as on a real machine. Bets 5/10/25/50/100.
-- **Tokens**: 1,000 when you sign up. **🎁 Free tokens** gives more every 4 hours (100 to 10,000). If
+- **Tokens**: 1,000 when you sign up. **🎁 Free tokens** gives more every 25 minutes, one pomodoro (100 to 10,000). If
   you run out, a free refill (+500) is available once a day.
 - **💰 I'm Rich :)** opens the creator's GitHub Sponsors page, if you'd like to tip. It buys no tokens.
 - A band above the prompt shows your balance, with **Show/Hide** for the pane. `/slots logout` signs out.

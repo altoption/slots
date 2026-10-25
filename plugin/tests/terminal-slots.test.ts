@@ -538,7 +538,7 @@ test("I'm Rich buttons sit in the same row as their neighbours, never on a line 
   await ui.unmount()
 })
 
-test("I'm Rich :) opens the creator's GitHub Sponsors page; Free tokens is the 4-hourly claim", async ($, on) => {
+test("I'm Rich :) opens the creator's GitHub Sponsors page; Free tokens is the 25-minute claim", async ($, on) => {
   signedIn(on)
   const host = fakeHost(on)
   const opened: string[][] = []

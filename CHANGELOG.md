@@ -2,6 +2,11 @@
 
 Update with `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.10.2] - 2026-10-25
+
+### Changed
+- Free tokens every 25 minutes, one pomodoro.
+
 ## [0.10.1] - 2026-10-25
 
 ### Added
