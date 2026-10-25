@@ -1,0 +1,12 @@
+{
+  "name": "terminal-slots",
+  "description": "Terminal Slots: slots and video poker in a Claude Code side pane",
+  "owner": { "name": "altoption" },
+  "plugins": [
+    {
+      "name": "terminal-slots",
+      "source": "./plugin",
+      "description": "Slots and video poker in a side pane, free tokens, GitHub sign-in"
+    }
+  ]
+}
