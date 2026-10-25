@@ -7,6 +7,8 @@ export type CasinoView = {
   message: string
   isBusy: boolean
   isPaneOpen: boolean
+  // After I'm Rich: a non-supporter sees a support link until their next action.
+  showNudge: boolean
   slots: { grid: string[][]; bet: number; win: number; cells: Cell[]; isSpinning: boolean; message: string }
   poker: { cards: (string | null)[]; held: boolean[]; winning: number[]; phase: 'idle' | 'dealt' | 'drawn'; bet: number; result: string; win: number; message: string }
   calib: { settled: number; brier: number | null; pending: number | null }

@@ -431,6 +431,12 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(letters.map(t => t.text).join('')).toBe('octo')
     expect(new Set(letters.map(t => t.color)).size).toBe(4) // each letter its own colour
     expect(texts.find(t => t.text.includes('★'))?.color).toBe('warning')
+    // Inline, not stacked: every letter sits inside one Text that holds the whole name.
+    let parent: Node | undefined
+    walk(await ui.drawn(), n => {
+      if (n.type === 'Text' && (n.children ?? []).filter(c => (c as Node)?.type === 'Text').length >= 4) parent = n
+    })
+    expect(textsOf(parent).slice(1).map(t => t.text).join('')).toMatch(/^octo/)
     await ui.unmount()
   })
 }
@@ -443,5 +449,31 @@ test("a non-supporter's name stays plain, with no star", async ($, on) => {
   const texts = textsOf(await ui.drawn())
   expect(texts.some(t => t.text.includes('octo'))).toBe(true)
   expect(texts.some(t => t.text.includes('★') || t.text.includes('⭐'))).toBe(false)
+  await ui.unmount()
+})
+
+test('after I\'m Rich, a non-supporter sees a support nudge until their next action', async ($, on) => {
+  signedIn(on)
+  const clock = mock.clock(on)
+  fakeHost(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeFalsy()
+  await ui.press({ key: 'loot' })
+  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeTruthy()
+  await ui.press({ key: 'spin' })
+  await clock.advance(1000)
+  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeFalsy()
+  await ui.unmount()
+})
+
+test("a supporter never sees the nudge after I'm Rich", async ($, on) => {
+  signedIn(on)
+  const host = fakeHost(on)
+  host.server.isMember = true
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'loot' })
+  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeFalsy()
   await ui.unmount()
 })

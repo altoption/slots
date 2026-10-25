@@ -36,11 +36,12 @@ const view = atom(
     message: '',
     isBusy: false,
     isPaneOpen: false,
+    showNudge: false,
     slots: NEW_SLOTS(),
     poker: NEW_POKER(),
     calib: { settled: 0, brier: null, pending: null },
   } as CasinoView,
-  { shape: 'view-7' },
+  { shape: 'view-8' },
 )
 
 // Fixed: the mod only ever talks to the Terminal Slots host. Edit here to develop against localhost.
@@ -191,7 +192,7 @@ async function spin($: EngineInterface): Promise<void> {
   inFlight = true
   const at = takeTicket()
   const v = await read($, view)
-  await update($, view, v => ({ ...v, isBusy: true, slots: { ...v.slots, isSpinning: true, cells: [], win: 0, message: '' } }))
+  await update($, view, v => ({ ...v, isBusy: true, showNudge: false, slots: { ...v.slots, isSpinning: true, cells: [], win: 0, message: '' } }))
   const startedAt = await $.clock.now()
   const r = await api($, 'POST', '/v1/slots/spin', { bet: v.slots.bet, entryId: entryId() })
   // Let the reels run at least ~0.9 s so the result lands like a spin, not a flicker.
@@ -227,7 +228,7 @@ async function deal($: EngineInterface): Promise<void> {
     const at = takeTicket()
     const v = await read($, view)
     if (v.poker.phase === 'dealt') return
-    await update($, view, v => ({ ...v, isBusy: true, poker: { ...v.poker, message: '' } }))
+    await update($, view, v => ({ ...v, isBusy: true, showNudge: false, poker: { ...v.poker, message: '' } }))
     const r = await api($, 'POST', '/v1/poker/deal', { bet: v.poker.bet, entryId: entryId() })
     if (r.status !== 200) {
       await update($, view, v => ({ ...v, poker: { ...v.poker, message: brokeHint(r.body.error ?? 'deal failed') } }))
@@ -313,6 +314,7 @@ async function openLootbox($: EngineInterface): Promise<void> {
   const r = await api($, 'POST', '/v1/lootbox')
   if (r.status === 200) {
     await say($, `💰 I'm Rich :) ${String(r.body.prize.label).toUpperCase()}: +${r.body.prize.tokens} tokens`)
+    await update($, view, v => ({ ...v, showNudge: r.body.membership?.isMember !== true }))
     if (r.body.prize.tokens >= 2000) $.ui.toast(`💰 I'm Rich :) ${r.body.prize.label}! +${r.body.prize.tokens}`)
     await setAccount($, r.body, at)
   } else if (r.status === 429 && typeof r.body.nextLootboxMs === 'number') {
@@ -360,7 +362,7 @@ async function togglePane($: EngineInterface): Promise<void> {
 }
 
 async function setTab($: EngineInterface, tab: CasinoView['tab']): Promise<void> {
-  await update($, view, v => ({ ...v, tab, message: '' }))
+  await update($, view, v => ({ ...v, tab, message: '', showNudge: false }))
 }
 
 // ---- calibration (local, no tokens) ----------------------------------------------------------------
@@ -456,14 +458,15 @@ export const register: Register = on => {
             <Text bold>{v.account.balance.toLocaleString()} tokens</Text>
             <Text dimColor> · </Text>
             {v.account.isMember ? (
-              <>
+              // One Text holding the coloured letters, so the name flows inline instead of stacking.
+              <Text bold>
                 {[...v.account.login].map((ch, n) => (
-                  <Text key={`name-${n}`} bold color={RAINBOW[n % RAINBOW.length]}>
+                  <Text key={`name-${n}`} color={RAINBOW[n % RAINBOW.length]}>
                     {ch}
                   </Text>
                 ))}
                 <Text color="warning"> ★</Text>
-              </>
+              </Text>
             ) : (
               <Text dimColor>{v.account.login}</Text>
             )}
@@ -492,6 +495,14 @@ export const register: Register = on => {
               <Button key="support-broke" label="⭐ Support the creator" onPress={() => void openMembership($)} />
             </>
           )}
+        </Box>
+      ) : null
+
+    const nudgeRow =
+      v.account && v.showNudge && !v.account.isMember ? (
+        <Box>
+          <Text dimColor>Enjoying it? </Text>
+          <Button key="support-nudge" label="⭐ Support the creator" onPress={() => void openMembership($)} />
         </Box>
       ) : null
 
@@ -527,6 +538,7 @@ export const register: Register = on => {
         <Box flexDirection="column">
           {header}
           {brokeRow}
+          {nudgeRow}
           <Text> </Text>
           {Client ? (
             <Client
@@ -554,6 +566,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {header}
         {brokeRow}
+        {nudgeRow}
         <Text> </Text>
         {columns < 30 ? (
           <Box flexDirection="column">

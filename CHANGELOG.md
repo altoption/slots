@@ -3,6 +3,15 @@
 Every release of the Terminal Slots plugin. Install or update with
 `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.9.0] - 2026-10-25
+
+### Added
+- After I'm Rich :), players who don't support the game yet see "Enjoying it? ⭐ Support the creator"
+  until their next action. Supporting still buys no tokens.
+
+### Fixed
+- A supporter's rainbow name was drawn one letter per line; it now reads inline.
+
 ## [0.8.0] - 2026-10-25
 
 ### Added
