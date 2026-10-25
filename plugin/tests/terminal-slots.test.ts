@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { renderCards, renderReels } from '../hooks/ascii'
-import { brier, isGithubPage, isSafeHost, memberPageUrl, testOutcome } from '../hooks/game'
+import { brier, isGithubPage, isSafeHost, testOutcome } from '../hooks/game'
 
 const GRID = [
   ['hay', 'star', 'lantern'],
@@ -30,8 +30,6 @@ test('helpers: safe hosts, test outcomes, Brier', async () => {
   expect(testOutcome('ls', false)).toBe(null)
   expect(brier([{ pPass: 0.8, passed: true }])?.toFixed(2)).toBe('0.04')
   expect(isGithubPage('https://github.com/login/device')).toBe(true)
-  expect(memberPageUrl('https://slots.example.workers.dev/api')).toBe('https://slots.example.workers.dev/#membership')
-  expect(memberPageUrl('http://evil.example.com')).toBe(null)
   for (const bad of ['-a Calculator', 'file:///etc/passwd', 'http://github.com/login/device', 'https://github.com.evil.io/x', 'https://user@github.com/', 'javascript:alert(1)', 42]) {
     expect(isGithubPage(bad)).toBe(false)
   }
@@ -184,7 +182,7 @@ test('signed in: spin lands the server grid; poker auto-holds a paying deal and 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount(PANE(surface))
     expect((await ui.find({ type: 'Text', text: /tokens$/ }))?.text).toMatch(/tokens/)
-    expect(await ui.find({ type: 'Button', key: 'support' } as never)).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'rich' } as never)).toBeTruthy()
     await ui.unmount()
   }
 
@@ -361,13 +359,13 @@ test('the band above the prompt shows the balance and toggles the pane', async (
   expect(opened.filter(id => id === 'slots').length).toBeGreaterThanOrEqual(2)
 })
 
-test('broke: the pane offers a free refill beside the support link', async ($, on) => {
+test("broke: the pane offers a free refill beside I'm Rich", async ($, on) => {
   signedIn(on)
   const host = fakeHost(on)
   host.server.balance = 4
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
-  expect(await ui.find({ type: 'Button', key: 'support-broke' } as never)).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'rich-broke' } as never)).toBeTruthy()
   await ui.press({ key: 'refill' })
   expect((await ui.find({ type: 'Text', text: /Refilled/ }))?.text).toMatch(/\+500/)
   expect(await ui.find({ type: 'Button', key: 'refill' } as never)).toBeFalsy()
@@ -452,29 +450,29 @@ test("a non-supporter's name stays plain, with no star", async ($, on) => {
   await ui.unmount()
 })
 
-test('after I\'m Rich, a non-supporter sees a support nudge until their next action', async ($, on) => {
+test("after Free tokens, a non-supporter sees an I'm Rich nudge until their next action", async ($, on) => {
   signedIn(on)
   const clock = mock.clock(on)
   fakeHost(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
-  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeFalsy()
   await ui.press({ key: 'loot' })
-  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeTruthy()
   await ui.press({ key: 'spin' })
   await clock.advance(1000)
-  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeFalsy()
   await ui.unmount()
 })
 
-test("a supporter never sees the nudge after I'm Rich", async ($, on) => {
+test("a supporter never sees the nudge after Free tokens", async ($, on) => {
   signedIn(on)
   const host = fakeHost(on)
   host.server.isMember = true
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
   await ui.press({ key: 'loot' })
-  expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'rich-nudge' } as never)).toBeFalsy()
   await ui.unmount()
 })
 
@@ -527,14 +525,29 @@ const rowOf = (tree: unknown, key: string) => {
 }
 const keysIn = (row: Node | undefined) => (row?.children ?? []).map(c => (c as Node)?.props?.key).filter(Boolean)
 
-test('Support buttons sit in the same row as their neighbours, never on a line of their own', async ($, on) => {
+test("I'm Rich buttons sit in the same row as their neighbours, never on a line of their own", async ($, on) => {
   signedIn(on)
   const host = fakeHost(on)
   host.server.balance = 4 // broke: the refill row shows its support button too
   await start($)
   const ui = await $.ui.mount(PANE('terminal'))
   const tree = await ui.drawn()
-  expect(keysIn(rowOf(tree, 'loot'))).toEqual(expect.arrayContaining(['loot', 'support']))
-  expect(keysIn(rowOf(tree, 'refill'))).toEqual(expect.arrayContaining(['refill', 'support-broke']))
+  expect(keysIn(rowOf(tree, 'loot'))).toEqual(expect.arrayContaining(['loot', 'rich']))
+  expect(keysIn(rowOf(tree, 'refill'))).toEqual(expect.arrayContaining(['refill', 'rich-broke']))
+  await ui.unmount()
+})
+
+test("I'm Rich :) opens the creator's GitHub Sponsors page; Free tokens is the 4-hourly claim", async ($, on) => {
+  signedIn(on)
+  const host = fakeHost(on)
+  const opened: string[][] = []
+  on('process.run', (_, e) => (opened.push([...e.argv]), { value: { exitCode: 0, stdout: '', stderr: '' } } as never))
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect(await label(ui, 'rich')).toBe("💰 I'm Rich :)")
+  expect(await label(ui, 'loot')).toBe('🎁 Free tokens')
+  await ui.press({ key: 'rich' })
+  expect(opened).toEqual([['open', 'https://github.com/sponsors/altoption']])
+  expect(host.seen.some(x => x.includes('/v1/lootbox'))).toBe(false) // donating never claims tokens
   await ui.unmount()
 })

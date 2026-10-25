@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CasinoView } from '../types'
 import { cardFace, cardText, isRedCard, randomGrid, renderReels } from './ascii'
-import { brier, isGithubPage, isSafeHost, memberPageUrl, newCalibration, testOutcome, type Calibration } from './game'
+import { brier, isGithubPage, isSafeHost, newCalibration, testOutcome, type Calibration } from './game'
 
 const PANE = 'slots'
 const WAGER = 'mcp__terminal-slots__wager'
@@ -318,15 +318,15 @@ async function openLootbox($: EngineInterface): Promise<void> {
   const at = takeTicket()
   const r = await api($, 'POST', '/v1/lootbox')
   if (r.status === 200) {
-    await say($, `💰 I'm Rich :) ${String(r.body.prize.label).toUpperCase()}: +${r.body.prize.tokens} tokens`)
+    await say($, `🎁 Free tokens, ${String(r.body.prize.label)}: +${r.body.prize.tokens}`)
     await update($, view, v => ({ ...v, showNudge: r.body.membership?.isMember !== true }))
-    if (r.body.prize.tokens >= 2000) $.ui.toast(`💰 I'm Rich :) ${r.body.prize.label}! +${r.body.prize.tokens}`)
+    if (r.body.prize.tokens >= 2000) $.ui.toast(`🎁 ${r.body.prize.label} free tokens! +${r.body.prize.tokens}`)
     await setAccount($, r.body, at)
   } else if (r.status === 429 && typeof r.body.nextLootboxMs === 'number') {
     const minutes = Math.ceil((r.body.nextLootboxMs - (await $.clock.now())) / 60000)
-    await say($, `Not that rich yet: try again in ${minutes} min.`)
+    await say($, `More free tokens in ${minutes} min.`)
   } else {
-    await say($, r.body.error ?? "I'm Rich failed")
+    await say($, r.body.error ?? 'free tokens failed')
   }
 }
 
@@ -334,18 +334,19 @@ async function refill($: EngineInterface): Promise<void> {
   const at = takeTicket()
   const r = await api($, 'POST', '/v1/refill')
   if (r.status === 200) {
-    await say($, `🆓 Refilled: +${r.body.refilled} tokens. Enjoying it? ★ Support the creator.`)
+    await say($, `🆓 Refilled: +${r.body.refilled} tokens.`)
     await setAccount($, r.body, at)
   } else {
     await say($, r.body.error ?? 'refill failed')
   }
 }
 
-async function openMembership($: EngineInterface): Promise<void> {
-  const url = memberPageUrl(hostUrl)
-  if (!url) return say($, `Membership page unavailable for host ${hostUrl}`)
-  await say($, `Opening ${url}`)
-  void $.process.run(['open', url]).catch(() => undefined)
+// I'm Rich :) is the donate button: it opens the creator's GitHub Sponsors page. Sponsoring buys no tokens.
+const SPONSORS_URL = 'https://github.com/sponsors/altoption'
+
+async function imRich($: EngineInterface): Promise<void> {
+  await say($, `Opening ${SPONSORS_URL}. Thank you!`)
+  if (isGithubPage(SPONSORS_URL)) void $.process.run(['open', SPONSORS_URL]).catch(() => undefined)
 }
 
 const PANE_TITLE = '🎰 Terminal Slots'
@@ -476,10 +477,10 @@ export const register: Register = on => {
               <Text dimColor>{v.account.login}</Text>
             )}
             <Text> </Text>
-            <Button key="loot" label="💰 I'm Rich :)" onPress={() => void openLootbox($)} />
+            <Button key="loot" label="🎁 Free tokens" onPress={() => void openLootbox($)} />
             {/* Optional items are direct children of the row: a fragment would start a new line. */}
-            {v.account.isMember ? null : <Text> </Text>}
-            {v.account.isMember ? null : <Button key="support" label="★ Support" onPress={() => void openMembership($)} />}
+            <Text> </Text>
+            <Button key="rich" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
           </Box>
         ) : null}
       </Box>
@@ -491,18 +492,16 @@ export const register: Register = on => {
         <Box>
           <Text bold>Out of tokens? </Text>
           <Button key="refill" variant="primary" label="🆓 Free refill (+500)" onPress={() => void refill($)} />
-          {v.account.isMember ? null : <Text> </Text>}
-          {v.account.isMember ? null : (
-            <Button key="support-broke" label="★ Support the creator" onPress={() => void openMembership($)} />
-          )}
+          <Text> </Text>
+          <Button key="rich-broke" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
         </Box>
       ) : null
 
     const nudgeRow =
       v.account && v.showNudge && !v.account.isMember ? (
         <Box>
-          <Text dimColor>Enjoying it? </Text>
-          <Button key="support-nudge" label="★ Support the creator" onPress={() => void openMembership($)} />
+          <Text dimColor>Feeling rich? </Text>
+          <Button key="rich-nudge" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
         </Box>
       ) : null
 

@@ -51,8 +51,9 @@ What changed in each release: [CHANGELOG](CHANGELOG.md).
 - **Slots**: Barn of Fortune, 5 reels × 3 rows, 10 lines. Bets 10/20/50/100.
 - **Poker**: Royal Draw, Jacks or Better. Deal, then click a card (or press 1–5) to hold it, then
   DRAW. A dealt hand that already pays starts held, as on a real machine. Bets 5/10/25/50/100.
-- **Tokens**: 1,000 when you sign up. **💰 I'm Rich :)** gives free tokens every 4 hours (100 to
-  10,000). If you run out, a free refill (+500) is available once a day.
+- **Tokens**: 1,000 when you sign up. **🎁 Free tokens** gives more every 4 hours (100 to 10,000). If
+  you run out, a free refill (+500) is available once a day.
+- **💰 I'm Rich :)** opens the creator's GitHub Sponsors page, if you'd like to tip. It buys no tokens.
 - A band above the prompt shows your balance, with **Show/Hide** for the pane. `/slots logout` signs out.
 
 ## Fair play: what you can check
@@ -76,8 +77,8 @@ Everything it does, so you can check it against the code in [`plugin/hooks/`](pl
 
 | What | Where | Details |
 |---|---|---|
-| Talks to one server | `register.tsx` `api()` | Only `https://terminal-slots.altoption.workers.dev` (fixed in the code). Sends game actions (spin, deal, draw, I'm Rich, refill), sign-in, and your session token. Nothing about your code, prompts or Claude's work. |
-| Opens your browser | `signIn()`, `openMembership()` | Only GitHub's own `https://github.com/…` sign-in page, and the game site's support page. |
+| Talks to one server | `register.tsx` `api()` | Only `https://terminal-slots.altoption.workers.dev` (fixed in the code). Sends game actions (spin, deal, draw, free tokens, refill), sign-in, and your session token. Nothing about your code, prompts or Claude's work. |
+| Opens your browser | `signIn()`, `imRich()` | Only GitHub's own pages: the sign-in page, and `github.com/sponsors/altoption` when you press I'm Rich. |
 | Stores locally | Claude Code's plugin store | Your session token for the game server, and Claude's calibration stats. |
 | Gives Claude one tool | `wager` | Claude can record how likely it thinks a test run is to pass before running it. The plugin doesn't change Claude's system prompt. |
 | Watches tool calls | `tool.call` hook | Reads the text of Bash commands **locally** to spot test runs (`npm test`, `pytest`, …) and whether they passed, to score Claude's calibration (a Brier score shown in the pane). Never sent anywhere; never blocks or changes a tool call. |

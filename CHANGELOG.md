@@ -3,6 +3,14 @@
 Every release of the Terminal Slots plugin. Install or update with
 `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.10.0] - 2026-10-25
+
+### Changed
+- **💰 I'm Rich :)** is now the tip button: it opens the creator's GitHub Sponsors page. It replaces
+  the ★ Support buttons and buys no tokens.
+- The free tokens every 4 hours are now **🎁 Free tokens**; after claiming, "Feeling rich?" offers
+  I'm Rich. When you're out of tokens, the free refill sits beside I'm Rich.
+
 ## [0.9.2] - 2026-10-25
 
 ### Fixed

@@ -28,12 +28,3 @@ export const isGithubPage = (uri: unknown): uri is string => {
   }
 }
 
-// The host's own membership page, opened only for a host that may carry the session.
-export const memberPageUrl = (hostUrl: string): string | null => {
-  if (!isSafeHost(hostUrl)) return null
-  try {
-    return `${new URL(hostUrl).origin}/#membership`
-  } catch {
-    return null
-  }
-}
