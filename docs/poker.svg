@@ -14,9 +14,9 @@
 <text x="62" y="212" fill="#f4c430" font-size="14" font-weight="700" text-anchor="middle">[ HELD ]</text>
 <rect x="116" y="86" width="76" height="100" rx="6" fill="none" stroke="#f4c430" stroke-width="2"/>
 <rect x="121" y="91" width="66" height="90" rx="4" fill="none" stroke="#f4c430" stroke-width="2"/>
-<text x="128" y="110" fill="#ff8fb8" font-size="17" font-weight="700" text-anchor="start">A</text>
-<text x="154.0" y="146.0" fill="#ff8fb8" font-size="28" font-weight="400" text-anchor="middle">♥</text>
-<text x="180" y="174" fill="#ff8fb8" font-size="17" font-weight="700" text-anchor="end">A</text>
+<text x="128" y="110" fill="#ff4f5e" font-size="17" font-weight="700" text-anchor="start">A</text>
+<text x="154.0" y="146.0" fill="#ff4f5e" font-size="28" font-weight="400" text-anchor="middle">♥</text>
+<text x="180" y="174" fill="#ff4f5e" font-size="17" font-weight="700" text-anchor="end">A</text>
 <text x="144.8" y="212" fill="#f4c430" font-size="14" font-weight="700" text-anchor="middle">[ HELD ]</text>
 <rect x="208" y="86" width="76" height="100" rx="6" fill="none" stroke="#e8e3d9" stroke-width="1.5"/>
 <text x="220" y="110" fill="#e8e3d9" font-size="17" font-weight="700" text-anchor="start">3</text>
@@ -24,9 +24,9 @@
 <text x="272" y="174" fill="#e8e3d9" font-size="17" font-weight="700" text-anchor="end">3</text>
 <text x="227.6" y="212" fill="#e8e3d9" font-size="14" font-weight="400" text-anchor="middle">[ HOLD ]</text>
 <rect x="300" y="86" width="76" height="100" rx="6" fill="none" stroke="#e8e3d9" stroke-width="1.5"/>
-<text x="312" y="110" fill="#ff8fb8" font-size="17" font-weight="700" text-anchor="start">K</text>
-<text x="338.0" y="146.0" fill="#ff8fb8" font-size="28" font-weight="400" text-anchor="middle">♦</text>
-<text x="364" y="174" fill="#ff8fb8" font-size="17" font-weight="700" text-anchor="end">K</text>
+<text x="312" y="110" fill="#ff4f5e" font-size="17" font-weight="700" text-anchor="start">K</text>
+<text x="338.0" y="146.0" fill="#ff4f5e" font-size="28" font-weight="400" text-anchor="middle">♦</text>
+<text x="364" y="174" fill="#ff4f5e" font-size="17" font-weight="700" text-anchor="end">K</text>
 <text x="310.4" y="212" fill="#e8e3d9" font-size="14" font-weight="400" text-anchor="middle">[ HOLD ]</text>
 <rect x="392" y="86" width="76" height="100" rx="6" fill="none" stroke="#e8e3d9" stroke-width="1.5"/>
 <text x="404" y="110" fill="#e8e3d9" font-size="17" font-weight="700" text-anchor="start">7</text>

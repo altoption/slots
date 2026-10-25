@@ -108,3 +108,6 @@ export const cardFace = (card: string | null, size: 'full' | 'mini'): string[] =
   const s = SUIT[card[1] ?? ''] ?? '?'
   return [pad(r, 6), `  ${s}   `, ' '.repeat(6 - r.length) + r]
 }
+
+// Hearts and diamonds are red; spades and clubs keep the text colour.
+export const isRedCard = (card: string | null): boolean => card?.[1] === 'h' || card?.[1] === 'd'

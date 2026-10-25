@@ -148,6 +148,15 @@ const cellOf = (tree: unknown, reel: number, row: number) => {
   }
 }
 
+// Every Text in a drawn tree, with its colour.
+const textsOf = (tree: unknown) => {
+  const out: { text: string; color?: string }[] = []
+  walk(tree, n => {
+    if (n.type === 'Text') out.push({ text: (n.children ?? []).join(''), color: n.props?.color as string | undefined })
+  })
+  return out
+}
+
 const signedIn = (on: On) => mock.store(on, { session: 'session-token-for-tests-0123456789' })
 const start = ($: { session: { start: (a: { cwd: string; surface: 'terminal'; isInteractive: boolean }) => Promise<unknown> } }) =>
   $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -302,18 +311,37 @@ test('host unreachable at startup keeps the session and says so', async ($, on) 
   await ui.unmount()
 })
 
-test('narrow pane: poker draws inline text, held cards in brackets, no wrapping', async ($, on) => {
+test('narrow pane: poker draws inline text, held cards in brackets, red suits red, no wrapping', async ($, on) => {
   signedIn(on)
   fakeHost(on)
   await start($)
   const ui = await $.ui.mount(PANE('terminal', 29))
   await ui.press({ key: 'tab-poker' })
   await ui.press({ key: 'deal' })
-  const row = (await ui.find({ type: 'Text', text: /\[A♠\]/ }))?.text ?? ''
-  expect(row).toBe('[A♠][A♥] 3♣  K♦  7♠ ')
-  expect(row.length).toBeLessThanOrEqual(29)
+  const texts = textsOf(await ui.drawn())
+  const row = ['[A♠]', '[A♥]', ' 3♣ ', ' K♦ ', ' 7♠ '].map(t => texts.find(x => x.text === t))
+  expect(row.map(x => x?.color)).toEqual([undefined, 'error', undefined, 'error', undefined])
+  expect(row.map(x => x?.text).join('').length).toBeLessThanOrEqual(29)
   await ui.unmount()
 })
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`card colours: hearts and diamonds red, spades and clubs plain (${surface})`, async ($, on) => {
+    signedIn(on)
+    fakeHost(on)
+    await start($)
+    const ui = await $.ui.mount(PANE(surface))
+    await ui.press({ key: 'tab-poker' })
+    await ui.press({ key: 'deal' })
+    const texts = textsOf(await ui.drawn())
+    const colourOf = (suit: string) => texts.find(x => x.text.includes(suit))?.color
+    expect(colourOf('♥')).toBe('error')
+    expect(colourOf('♦')).toBe('error')
+    expect(colourOf('♠')).toBe(undefined)
+    expect(colourOf('♣')).toBe(undefined)
+    await ui.unmount()
+  })
+}
 
 test('the band above the prompt shows the balance and toggles the pane', async ($, on) => {
   signedIn(on)

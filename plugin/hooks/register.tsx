@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CasinoView } from '../types'
-import { cardFace, randomGrid, renderCards, renderReels } from './ascii'
+import { cardFace, cardText, isRedCard, randomGrid, renderReels } from './ascii'
 import { brier, isGithubPage, isSafeHost, memberPageUrl, newCalibration, testOutcome, type Calibration } from './game'
 
 const PANE = 'slots'
@@ -10,6 +10,7 @@ const WAGER = 'mcp__terminal-slots__wager'
 const SLOT_BETS = [10, 20, 50, 100]
 const POKER_BETS = [5, 10, 25, 50, 100]
 const BIG_WIN = 20 // × bet
+const RED = 'error' // the theme's red: hearts and diamonds
 
 const RULES = `Terminal Slots is on. Before you run a test suite with Bash, call ${WAGER} with your honest probability that it passes. It only records your calibration (Brier score); nothing is at stake. One bet per test run.`
 
@@ -548,7 +549,17 @@ export const register: Register = on => {
         {columns < 30 ? (
           <Box flexDirection="column">
             {/* Inline text below 30 columns: brackets mark held cards, then the paying cards after a draw. */}
-            {lines(renderCards(v.poker.cards, 0, isDealt ? v.poker.held : [0, 1, 2, 3, 4].map(i => v.poker.winning.includes(i))))}
+            <Box>
+              {v.poker.cards.map((card, i) => {
+                const isMarked = isDealt ? v.poker.held[i] === true : v.poker.winning.includes(i)
+                const face = card ? cardText(card) : '##'
+                return (
+                  <Text key={`inline-${i}`} color={isRedCard(card) ? RED : undefined} bold={isMarked}>
+                    {isMarked ? `[${face}]` : ` ${face} `}
+                  </Text>
+                )
+              })}
+            </Box>
             {isDealt ? (
               <Box>
                 {[0, 1, 2, 3, 4].map(i => (
@@ -575,10 +586,16 @@ export const register: Register = on => {
                     {isDealt ? (
                       // The face itself is a borderless button: a click anywhere on it holds or releases the card.
                       <Button key={`card-${i}`} plain label={`card ${i + 1}`} onPress={() => void toggleHold($, i)}>
-                        <Text>{cardFace(v.poker.cards[i] ?? null, size).join('\n')}</Text>
+                        <Text color={isRedCard(v.poker.cards[i] ?? null) ? RED : undefined}>
+                          {cardFace(v.poker.cards[i] ?? null, size).join('\n')}
+                        </Text>
                       </Button>
                     ) : (
-                      lines(cardFace(v.poker.cards[i] ?? null, size))
+                      cardFace(v.poker.cards[i] ?? null, size).map((line, n) => (
+                        <Text key={`face-${i}-${n}`} color={isRedCard(v.poker.cards[i] ?? null) ? RED : undefined}>
+                          {line}
+                        </Text>
+                      ))
                     )}
                   </Box>
                   {isDealt ? (
