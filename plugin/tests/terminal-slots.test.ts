@@ -66,13 +66,14 @@ const fakeHost = (on: On) => {
     openHand: null as null | typeof PAIR,
     isDown: false,
     isMember: false,
+    nextLootboxMs: 0,
     dealStatus: 200,
     drawStatus: 200,
   }
   const account = () => ({
     login: 'octo',
     balance: server.balance,
-    nextLootboxMs: 0,
+    nextLootboxMs: server.nextLootboxMs,
     openHand: server.openHand,
     membership: { isMember: server.isMember },
     canRefill: server.balance < 10,
@@ -549,5 +550,21 @@ test("I'm Rich :) opens the creator's GitHub Sponsors page; Free tokens is the 4
   await ui.press({ key: 'rich' })
   expect(opened).toEqual([['open', 'https://github.com/sponsors/altoption']])
   expect(host.seen.some(x => x.includes('/v1/lootbox'))).toBe(false) // donating never claims tokens
+  await ui.unmount()
+})
+
+test('while free tokens recharge, the button is a countdown that ticks down, then comes back', async ($, on) => {
+  signedIn(on)
+  const clock = mock.clock(on)
+  const host = fakeHost(on)
+  host.server.nextLootboxMs = (3 * 60 + 12) * 60_000 // 3h 12m from the mock clock's start
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect(await ui.find({ type: 'Button', key: 'loot' } as never)).toBeFalsy()
+  expect((await ui.find({ type: 'Text', text: /Free tokens in/ }))?.text).toBe('[ 🎁 Free tokens in 3h 12m ]')
+  await clock.advance(60 * 60_000)
+  expect((await ui.find({ type: 'Text', text: /Free tokens in/ }))?.text).toBe('[ 🎁 Free tokens in 2h 12m ]')
+  await clock.advance((2 * 60 + 12) * 60_000)
+  expect(await ui.find({ type: 'Button', key: 'loot' } as never)).toBeTruthy()
   await ui.unmount()
 })

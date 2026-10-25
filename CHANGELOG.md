@@ -2,6 +2,11 @@
 
 Update with `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.10.1] - 2026-10-25
+
+### Added
+- Free tokens shows how long until you can claim again.
+
 ## [0.10.0] - 2026-10-25
 
 ### Added

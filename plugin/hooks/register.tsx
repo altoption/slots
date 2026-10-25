@@ -37,11 +37,12 @@ const view = atom(
     isBusy: false,
     isPaneOpen: false,
     showNudge: false,
+    now: 0,
     slots: NEW_SLOTS(),
     poker: NEW_POKER(),
     calib: { settled: 0, brier: null, pending: null },
   } as CasinoView,
-  { shape: 'view-8' },
+  { shape: 'view-9' },
 )
 
 // Fixed: the mod only ever talks to the Terminal Slots host. Edit here to develop against localhost.
@@ -351,6 +352,24 @@ async function imRich($: EngineInterface): Promise<void> {
 
 const PANE_TITLE = '🎰 Terminal Slots'
 
+// "3h 12m", "12m": time left, rounded up to the minute.
+const untilText = (ms: number) => {
+  const minutes = Math.ceil(ms / 60_000)
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`
+}
+
+// Keeps view.now fresh so countdowns tick; one ticker however often the session starts.
+let clockTicker: { cancel: () => void } | null = null
+async function startClock($: EngineInterface): Promise<void> {
+  clockTicker?.cancel()
+  const tick = async () => {
+    const now = await $.clock.now()
+    await update($, view, v => ({ ...v, now }))
+  }
+  await tick()
+  clockTicker = $.clock.every(30_000, () => void tick())
+}
+
 async function showPane($: EngineInterface): Promise<{ isPlaced: boolean; reason?: string }> {
   const opened = await $.ui.open({ id: PANE, title: PANE_TITLE })
   await update($, view, v => ({ ...v, isPaneOpen: true }))
@@ -402,6 +421,8 @@ export const register: Register = on => {
     await calibrate($, () => undefined)
     // A reload re-runs this but drops timers: nothing can still be spinning or in flight.
     inFlight = false
+    // The countdown clock is cosmetic: it must never stop the session from starting.
+    await startClock($).catch(() => undefined)
     await update($, view, v => ({ ...v, isBusy: false, slots: { ...v.slots, isSpinning: false } }))
     if (await $.store.get('session')) {
       const at = takeTicket()
@@ -477,7 +498,11 @@ export const register: Register = on => {
               <Text dimColor>{v.account.login}</Text>
             )}
             <Text> </Text>
-            <Button key="loot" label="🎁 Free tokens" onPress={() => void openLootbox($)} />
+            {v.account.nextLootboxMs > v.now ? (
+              <Text dimColor>[ 🎁 Free tokens in {untilText(v.account.nextLootboxMs - v.now)} ]</Text>
+            ) : (
+              <Button key="loot" label="🎁 Free tokens" onPress={() => void openLootbox($)} />
+            )}
             {/* Optional items are direct children of the row: a fragment would start a new line. */}
             <Text> </Text>
             <Button key="rich" label="💰 I'm Rich :)" onPress={() => void imRich($)} />
