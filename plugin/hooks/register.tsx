@@ -192,6 +192,10 @@ async function spin($: EngineInterface): Promise<void> {
   inFlight = true
   const at = takeTicket()
   const v = await read($, view)
+  if (v.account && v.account.balance < v.slots.bet) {
+    inFlight = false
+    return // the pane shows SPIN as unpressable text and says why
+  }
   await update($, view, v => ({ ...v, isBusy: true, showNudge: false, slots: { ...v.slots, isSpinning: true, cells: [], win: 0, message: '' } }))
   const startedAt = await $.clock.now()
   const r = await api($, 'POST', '/v1/slots/spin', { bet: v.slots.bet, entryId: entryId() })
@@ -228,6 +232,7 @@ async function deal($: EngineInterface): Promise<void> {
     const at = takeTicket()
     const v = await read($, view)
     if (v.poker.phase === 'dealt') return
+    if (v.account && v.account.balance < v.poker.bet) return // the pane shows DEAL as unpressable text
     await update($, view, v => ({ ...v, isBusy: true, showNudge: false, poker: { ...v.poker, message: '' } }))
     const r = await api($, 'POST', '/v1/poker/deal', { bet: v.poker.bet, entryId: entryId() })
     if (r.status !== 200) {
@@ -329,7 +334,7 @@ async function refill($: EngineInterface): Promise<void> {
   const at = takeTicket()
   const r = await api($, 'POST', '/v1/refill')
   if (r.status === 200) {
-    await say($, `🆓 Refilled: +${r.body.refilled} tokens. Enjoying it? ⭐ Support the creator.`)
+    await say($, `🆓 Refilled: +${r.body.refilled} tokens. Enjoying it? ★ Support the creator.`)
     await setAccount($, r.body, at)
   } else {
     await say($, r.body.error ?? 'refill failed')
@@ -475,7 +480,7 @@ export const register: Register = on => {
             {v.account.isMember ? null : (
               <>
                 <Text> </Text>
-                <Button key="support" label="⭐ Support" onPress={() => void openMembership($)} />
+                <Button key="support" label="★ Support" onPress={() => void openMembership($)} />
               </>
             )}
           </Box>
@@ -492,7 +497,7 @@ export const register: Register = on => {
           {v.account.isMember ? null : (
             <>
               <Text> </Text>
-              <Button key="support-broke" label="⭐ Support the creator" onPress={() => void openMembership($)} />
+              <Button key="support-broke" label="★ Support the creator" onPress={() => void openMembership($)} />
             </>
           )}
         </Box>
@@ -502,7 +507,7 @@ export const register: Register = on => {
       v.account && v.showNudge && !v.account.isMember ? (
         <Box>
           <Text dimColor>Enjoying it? </Text>
-          <Button key="support-nudge" label="⭐ Support the creator" onPress={() => void openMembership($)} />
+          <Button key="support-nudge" label="★ Support the creator" onPress={() => void openMembership($)} />
         </Box>
       ) : null
 
@@ -526,12 +531,19 @@ export const register: Register = on => {
       )
     }
 
-    const calib = (
-      <Text dimColor>
-        Claude's calibration: {v.calib.settled} bets · Brier {v.calib.brier === null ? 'n/a' : v.calib.brier.toFixed(3)}
-        {v.calib.pending === null ? '' : ` · pending P(pass)=${v.calib.pending}`}
-      </Text>
-    )
+    // Shown once Claude has predicted a test run: how often its confidence matched what happened.
+    const calib =
+      v.calib.settled > 0 || v.calib.pending !== null ? (
+        <Text dimColor>
+          Claude's test predictions: {v.calib.settled}
+          {v.calib.brier === null ? '' : ` · Brier ${v.calib.brier.toFixed(3)} (0 is perfect)`}
+          {v.calib.pending === null ? '' : ` · now predicting ${Math.round(v.calib.pending * 100)}% pass`}
+        </Text>
+      ) : null
+
+    // A bet the balance can't cover: the action becomes plain text and the pane says why.
+    const unaffordable = (bet: number) =>
+      v.account && v.account.balance < bet ? `Bet ${bet} is more than your ${v.account.balance.toLocaleString()} tokens. Lower the bet.` : null
 
     if (v.tab === 'slots') {
       return (
@@ -551,11 +563,16 @@ export const register: Register = on => {
           )}
           <Text bold>{v.slots.isSpinning ? 'spinning…' : v.slots.message || v.message || ' '}</Text>
           <Box>
-            <Button key="spin" variant="primary" label="SPIN" onPress={() => void spin($)} />
+            {unaffordable(v.slots.bet) ? (
+              <Text dimColor>[ SPIN ]</Text>
+            ) : (
+              <Button key="spin" variant="primary" label="SPIN" onPress={() => void spin($)} />
+            )}
             <Text> </Text>
             <Button key="slot-bet" label={`Bet ${v.slots.bet}`} onPress={() => void cycleBet($, 'slots')} />
           </Box>
-          <Text dimColor>Barn of Fortune · 10 lines · published RTP 96.13%</Text>
+          {unaffordable(v.slots.bet) ? <Text color="warning">{unaffordable(v.slots.bet)}</Text> : null}
+          <Text dimColor>Barn of Fortune · 10 lines</Text>
           {calib}
         </Box>
       )
@@ -640,12 +657,17 @@ export const register: Register = on => {
           {isDealt ? (
             <Button key="draw" variant="primary" label="DRAW" onPress={() => void drawCards($)} />
           ) : (
-            <Button key="deal" variant="primary" label="DEAL" onPress={() => void deal($)} />
+            unaffordable(v.poker.bet) ? (
+              <Text dimColor>[ DEAL ]</Text>
+            ) : (
+              <Button key="deal" variant="primary" label="DEAL" onPress={() => void deal($)} />
+            )
           )}
           <Text> </Text>
           <Button key="poker-bet" label={`Bet ${v.poker.bet}`} onPress={() => void cycleBet($, 'poker')} />
         </Box>
-        <Text dimColor>Royal Draw · click a card or press 1-5 to hold</Text>
+        {!isDealt && unaffordable(v.poker.bet) ? <Text color="warning">{unaffordable(v.poker.bet)}</Text> : null}
+        <Text dimColor>Click a card or press 1-5 to hold</Text>
         {calib}
       </Box>
     )

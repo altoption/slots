@@ -3,6 +3,18 @@
 Every release of the Terminal Slots plugin. Install or update with
 `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.9.1] - 2026-10-25
+
+### Fixed
+- SPIN and DEAL can't be pressed when the bet is more than your balance; the pane says why
+  ("Bet 20 is more than your 17 tokens. Lower the bet.").
+- Support buttons use a solid ★, which every terminal draws the same.
+
+### Changed
+- Claude's calibration line stays hidden until Claude has made its first prediction, and reads in
+  plain words ("Claude's test predictions: 3 · Brier 0.120 (0 is perfect)").
+- Shorter poker hint and slots caption, so both fit narrow panes.
+
 ## [0.9.0] - 2026-10-25
 
 ### Added

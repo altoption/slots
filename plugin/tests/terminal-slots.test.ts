@@ -477,3 +477,42 @@ test("a supporter never sees the nudge after I'm Rich", async ($, on) => {
   expect(await ui.find({ type: 'Button', key: 'support-nudge' } as never)).toBeFalsy()
   await ui.unmount()
 })
+
+test("can't spin a bet larger than the balance: SPIN turns to plain text with the reason", async ($, on) => {
+  signedIn(on)
+  const host = fakeHost(on)
+  host.server.balance = 17
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect(await ui.find({ type: 'Button', key: 'spin' } as never)).toBeTruthy() // bet 10 ≤ 17
+  await ui.press({ key: 'slot-bet' }) // → 20
+  expect(await ui.find({ type: 'Button', key: 'spin' } as never)).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /Bet 20 is more than your 17 tokens/ })).toBeTruthy()
+  await ui.press({ key: 'slot-bet' }) // 50
+  await ui.press({ key: 'slot-bet' }) // 100
+  await ui.press({ key: 'slot-bet' }) // back to 10
+  expect(await ui.find({ type: 'Button', key: 'spin' } as never)).toBeTruthy()
+  expect(host.seen.filter(x => x.includes('/v1/slots/spin'))).toHaveLength(0)
+  await ui.unmount()
+})
+
+test("can't deal a bet larger than the balance", async ($, on) => {
+  signedIn(on)
+  const host = fakeHost(on)
+  host.server.balance = 7
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  await ui.press({ key: 'tab-poker' }) // poker bet 10 > 7
+  expect(await ui.find({ type: 'Button', key: 'deal' } as never)).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /Bet 10 is more than your 7 tokens/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test("Claude's calibration line stays hidden until Claude has made a prediction", async ($, on) => {
+  signedIn(on)
+  fakeHost(on)
+  await start($)
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect(await ui.find({ type: 'Text', text: /calibration|Brier/ })).toBeFalsy()
+  await ui.unmount()
+})
