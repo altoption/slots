@@ -15,20 +15,36 @@ An independent plugin by [altoption](https://github.com/altoption). Not made or 
 You need Claude Code installed. In your terminal:
 
 ```
-claude plugin marketplace add altoption/slots
+claude plugin marketplace add https://github.com/altoption/slots.git
 claude plugin install terminal-slots@terminal-slots
 ```
 
-Start `claude`, type `/slots`, and press **Sign in with GitHub**. To update later:
-`claude plugin update terminal-slots@terminal-slots`, then restart Claude Code. What changed:
-[CHANGELOG](CHANGELOG.md). Or use the one-click button on
-[the website](https://terminal-slots.altoption.workers.dev).
+Then start `claude`, type `/slots`, and press **Sign in with GitHub**. The
+[website](https://terminal-slots.altoption.workers.dev) has a one-click button that types the install
+request into Claude Code for you.
 
-**Install trouble?**
-- *"Repository not found"*: check the spelling, `altoption/slots`.
+Use the full `https://…/slots.git` address as shown: with the short `altoption/slots` form, updates
+from inside Claude Code need a GitHub SSH key.
+
+### Updates
+
+- **Automatic (recommended):** in Claude Code, open `/plugin`, choose **Marketplaces**, then
+  **terminal-slots**, then **Enable auto-update**. Claude Code then picks up new releases on its own.
+- **By hand:** `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
+
+What changed in each release: [CHANGELOG](CHANGELOG.md).
+
+### Install trouble?
+
+- *"Repository not found"*: check the address, `https://github.com/altoption/slots.git`.
+- *"Cannot add marketplace "terminal-slots": its source doesn't match"*: you added it before under the
+  short `altoption/slots` form. Run `claude plugin marketplace remove terminal-slots`, then the two
+  install commands above.
 - Don't use `sudo`: plugins install for your own user.
 - *Pane not showing*: it opens on the right when the terminal is at least ~144 columns wide; `/slots`
   or the **Show** button above the prompt opens it at any width.
+- *"hooks module did not load"*: your Claude Code is older than the plugin needs. Update Claude Code
+  and restart it.
 
 ## Play
 
