@@ -3,6 +3,16 @@
 Every release of the Terminal Slots plugin. Install or update with
 `claude plugin update terminal-slots@terminal-slots`, then restart Claude Code.
 
+## [0.7.0] - 2026-10-25
+
+### Changed
+- The plugin no longer adds a paragraph to Claude's system prompt. The `wager` tool's own description
+  now tells Claude when to use it.
+
+### Fixed
+- The plugin failed to load on older Claude Code builds that don't support adding to the system
+  prompt. Updating Claude Code also fixes it.
+
 ## [0.6.2] - 2026-10-25
 
 ### Added

@@ -63,7 +63,7 @@ Everything it does, so you can check it against the code in [`plugin/hooks/`](pl
 | Talks to one server | `register.tsx` `api()` | Only `https://terminal-slots.altoption.workers.dev` (fixed in the code). Sends game actions (spin, deal, draw, I'm Rich, refill), sign-in, and your session token. Nothing about your code, prompts or Claude's work. |
 | Opens your browser | `signIn()`, `openMembership()` | Only GitHub's own `https://github.com/…` sign-in page, and the game site's support page. |
 | Stores locally | Claude Code's plugin store | Your session token for the game server, and Claude's calibration stats. |
-| Adds to Claude's system prompt | `prompt.compose` hook | One short paragraph asking Claude to record its probability that tests will pass, via a `wager` tool, before running them. |
+| Gives Claude one tool | `wager` | Claude can record how likely it thinks a test run is to pass before running it. The plugin doesn't change Claude's system prompt. |
 | Watches tool calls | `tool.call` hook | Reads the text of Bash commands **locally** to spot test runs (`npm test`, `pytest`, …) and whether they passed, to score Claude's calibration (a Brier score shown in the pane). Never sent anywhere; never blocks or changes a tool call. |
 
 ### Claude's calibration

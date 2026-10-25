@@ -12,7 +12,6 @@ const POKER_BETS = [5, 10, 25, 50, 100]
 const BIG_WIN = 20 // × bet
 const RED = 'error' // the theme's red: hearts and diamonds
 
-const RULES = `Terminal Slots is on. Before you run a test suite with Bash, call ${WAGER} with your honest probability that it passes. It only records your calibration (Brier score); nothing is at stake. One bet per test run.`
 
 // Bump the tag when CasinoView's fields change: a reload declines the old value.
 const NEW_SLOTS = (): CasinoView['slots'] => ({ grid: randomGrid(Math.random), bet: 10, win: 0, cells: [], isSpinning: false, message: '' })
@@ -381,7 +380,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'wager',
       description:
-        "Record your honest probability (0-1) that the next test run passes. Scored for calibration (Brier) only; nothing is at stake. Settled automatically by the next test command.",
+        'Before you run a test suite with Bash, call this once with your honest probability (0-1) that it passes. Terminal Slots scores your calibration (Brier score) when the run finishes; nothing is at stake.',
       inputSchema: {
         type: 'object',
         properties: { pPass: { type: 'number', minimum: 0, maximum: 1 } },
@@ -402,11 +401,6 @@ export const register: Register = on => {
     }
     void showPane($)
     return next(e)
-  })
-
-  on('prompt.compose', async ($, e, next) => {
-    const composed = await next(e)
-    return { sections: [...composed.sections, { id: 'terminal-slots:rules', text: RULES, scope: 'session' }] }
   })
 
   on('command.run', { command: 'slots' }, async ($, e) => {
